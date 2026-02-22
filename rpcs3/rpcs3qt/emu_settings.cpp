@@ -375,7 +375,7 @@ void emu_settings::EnhanceComboBox(QComboBox* combobox, emu_settings_type type, 
 
 	combobox->setCurrentIndex(index);
 
-	connect(combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), combobox, [this, is_ranged, combobox, type](int index)
+	connect(combobox, &QComboBox::currentIndexChanged, combobox, [this, is_ranged, combobox, type](int index)
 	{
 		if (index < 0) return;
 
@@ -668,10 +668,9 @@ void emu_settings::EnhanceSpinBox(QSpinBox* spinbox, emu_settings_type type, con
 	spinbox->setRange(min, max);
 	spinbox->setValue(val);
 
-	connect(spinbox, &QSpinBox::textChanged, this, [type, spinbox, this](const QString& /* text*/)
+	connect(spinbox, &QSpinBox::valueChanged, this, [type, this](int value)
 	{
-		if (!spinbox) return;
-		SetSetting(type, spinbox->cleanText().toStdString());
+		SetSetting(type, fmt::format("%d", value));
 	});
 
 	connect(this, &emu_settings::RestoreDefaultsSignal, spinbox, [def, spinbox]()
@@ -724,10 +723,9 @@ void emu_settings::EnhanceDoubleSpinBox(QDoubleSpinBox* spinbox, emu_settings_ty
 	spinbox->setRange(min, max);
 	spinbox->setValue(val);
 
-	connect(spinbox, &QDoubleSpinBox::textChanged, this, [type, spinbox, this](const QString& /* text*/)
+	connect(spinbox, &QDoubleSpinBox::valueChanged, this, [type, this](double value)
 	{
-		if (!spinbox) return;
-		SetSetting(type, spinbox->cleanText().toStdString());
+		SetSetting(type, fmt::format("%f", value));
 	});
 
 	connect(this, &emu_settings::RestoreDefaultsSignal, spinbox, [def, spinbox]()
@@ -988,14 +986,6 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case thread_scheduler_mode::os: return tr("Operating System", "Thread Scheduler Mode");
 		}
 		break;
-	case emu_settings_type::EnableTSX:
-		switch (static_cast<tsx_usage>(index))
-		{
-		case tsx_usage::disabled: return tr("Disabled", "Enable TSX");
-		case tsx_usage::enabled: return tr("Enabled", "Enable TSX");
-		case tsx_usage::forced: return tr("Forced", "Enable TSX");
-		}
-		break;
 	case emu_settings_type::Renderer:
 		switch (static_cast<video_renderer>(index))
 		{
@@ -1129,6 +1119,9 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case camera_handler::null: return tr("Null", "Camera handler");
 		case camera_handler::fake: return tr("Fake", "Camera handler");
 		case camera_handler::qt: return tr("Qt", "Camera handler");
+#ifdef HAVE_SDL3
+		case camera_handler::sdl: return tr("SDL", "Camera handler");
+#endif
 		}
 		break;
 	case emu_settings_type::MusicHandler:
@@ -1208,10 +1201,10 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 	case emu_settings_type::FIFOAccuracy:
 		switch (static_cast<rsx_fifo_mode>(index))
 		{
-		case rsx_fifo_mode::fast: return tr("Fast", "RSX FIFO Accuracy");
-		case rsx_fifo_mode::atomic: return tr("Atomic", "RSX FIFO Accuracy");
-		case rsx_fifo_mode::atomic_ordered: return tr("Ordered & Atomic", "RSX FIFO Accuracy");
-		case rsx_fifo_mode::as_ps3: return tr("PS3", "RSX FIFO Accuracy");
+		case rsx_fifo_mode::fast: return tr("Fast", "RSX FIFO Fetch Accuracy");
+		case rsx_fifo_mode::atomic: return tr("Atomic", "RSX FIFO Fetch Accuracy");
+		case rsx_fifo_mode::atomic_ordered: return tr("Ordered & Atomic", "RSX FIFO Fetch Accuracy");
+		case rsx_fifo_mode::as_ps3: return tr("PS3", "RSX FIFO Fetch Accuracy");
 		}
 		break;
 	case emu_settings_type::PerfOverlayDetailLevel:

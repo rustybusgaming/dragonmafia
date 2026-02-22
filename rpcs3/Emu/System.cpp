@@ -34,6 +34,7 @@
 
 #include "Loader/PSF.h"
 #include "Loader/TAR.h"
+#include "Loader/ISO.h"
 #include "Loader/ELF.h"
 #include "Loader/disc.h"
 
@@ -68,10 +69,6 @@ LOG_CHANNEL(sys_log, "SYS");
 // Preallocate 32 MiB
 stx::manual_typemap<void, 0x20'00000, 128> g_fixed_typemap;
 
-bool g_use_rtm = false;
-u64 g_rtm_tx_limit1 = 0;
-u64 g_rtm_tx_limit2 = 0;
-
 std::string g_cfg_defaults;
 
 atomic_t<u64> g_watchdog_hold_ctr{0};
@@ -79,7 +76,7 @@ atomic_t<u64> g_watchdog_hold_ctr{0};
 extern bool ppu_load_exec(const ppu_exec_object&, bool virtual_load, const std::string&, utils::serial* = nullptr);
 extern void spu_load_exec(const spu_exec_object&);
 extern void spu_load_rel_exec(const spu_rel_object&);
-extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_module<lv2_obj>*>* loaded_prx);
+extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_module<lv2_obj>*>* loaded_prx, bool is_fast_compilation);
 extern bool ppu_initialize(const ppu_module<lv2_obj>&, bool check_only = false, u64 file_size = 0);
 extern void ppu_finalize(const ppu_module<lv2_obj>&);
 extern void ppu_unload_prx(const lv2_prx&);
@@ -221,12 +218,18 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 
 	Emu.ConfigurePPUCache();
 
+	stx::g_launch_retainer = 1;
+
 	g_fxo->init(false, ar, [](){ Emu.ExecPostponedInitCode(); });
 
 	Emu.GetCallbacks().init_gs_render(ar);
-	Emu.GetCallbacks().init_pad_handler(Emu.GetTitleID());
 	Emu.GetCallbacks().init_kb_handler();
 	Emu.GetCallbacks().init_mouse_handler();
+
+	stx::g_launch_retainer = 0;
+	stx::g_launch_retainer.notify_all();
+
+	Emu.GetCallbacks().init_pad_handler(Emu.GetTitleID());
 
 	usz pos = 0;
 
@@ -249,7 +252,7 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 		// Reserved area
 		if (!load_and_check_reserved(*ar, advance))
 		{
-			sys_log.error("Potential failure to load savestate: padding buyes are not 0. %s", *ar);
+			sys_log.error("Potential failure to load savestate: padding bytes are not 0. %s", *ar);
 		}
 	}
 }
@@ -307,7 +310,7 @@ static void fixup_settings(const psf::registry* _psf)
 
 	if (g_cfg.net.net_active == np_internet_status::disabled && g_cfg.net.psn_status != np_psn_status::disabled)
 	{
-		sys_log.warning("Net status was set to disconnected so psn status was disabled");
+		sys_log.warning("Net status was set to disconnected so PSN status was disabled.");
 		g_cfg.net.psn_status.set(np_psn_status::disabled);
 	}
 }
@@ -780,7 +783,7 @@ bool Emulator::BootRsxCapture(const std::string& path)
 	std::unique_ptr<rsx::frame_capture_data> frame = std::make_unique<rsx::frame_capture_data>();
 	utils::serial load;
 	load.set_reading_state();
- 
+
  	const std::string lower = fmt::to_lower(path);
 
 	if (lower.ends_with(".gz") || lower.ends_with(".zst"))
@@ -838,6 +841,20 @@ bool Emulator::BootRsxCapture(const std::string& path)
 		return false;
 	}
 
+	m_path.clear();
+	m_path_old.clear();
+	m_path_original.clear();
+	m_path_real.clear();
+	m_title_id.clear();
+	m_title.clear();
+	m_localized_title.clear();
+	m_app_version.clear();
+	m_hash.clear();
+	m_cat.clear();
+	m_dir.clear();
+	m_sfo_dir.clear();
+	m_ar.reset();
+
 	Init();
 	g_cfg.video.disable_on_disk_shader_cache.set(true);
 
@@ -859,6 +876,7 @@ bool Emulator::BootRsxCapture(const std::string& path)
 
 	GetCallbacks().on_run(false);
 	m_state = system_state::starting;
+	m_state.notify_all();
 
 	ensure(g_fxo->init<named_thread<rsx::rsx_replay_thread>>("RSX Replay", std::move(frame)));
 
@@ -915,6 +933,7 @@ game_boot_result Emulator::BootGame(const std::string& path, const std::string& 
 
 				if (result != game_boot_result::no_errors)
 				{
+					unload_iso();
 					GetCallbacks().close_gs_frame();
 				}
 			}
@@ -1062,6 +1081,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 	sys_log.notice("Path: %s", m_path);
 
 	std::string inherited_ps3_game_path;
+	bool launching_from_disc_archive = false;
 
 	{
 		Init();
@@ -1153,12 +1173,16 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			std::string disc_info;
 			m_ar->serialize(argv.emplace_back(), disc_info, klic.emplace_back(), m_game_dir, hdd1);
 
+			launching_from_disc_archive = is_file_iso(disc_info);
+
+			sys_log.notice("Savestate: is iso archive = %d ('%s')", launching_from_disc_archive, disc_info);
+
 			if (!klic[0])
 			{
 				klic.clear();
 			}
 
-			if (!disc_info.empty() && disc_info[0] != '/')
+			if (!launching_from_disc_archive && !disc_info.empty() && disc_info[0] != '/')
 			{
 				// Restore disc path for disc games (must exist in games.yml i.e. your game library)
 				m_title_id = disc_info;
@@ -1166,6 +1190,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				// Load /dev_bdvd/ from game list if available
 				if (std::string game_path = m_games_config.get_path(m_title_id); !game_path.empty())
 				{
+					if (is_file_iso(game_path))
+					{
+						game_path = iso_device::virtual_device_name + "/PS3_GAME/./";
+					}
+
 					if (game_path.ends_with("/./"))
 					{
 						// Marked as PS3_GAME directory
@@ -1270,6 +1299,16 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 
 			m_path_old = m_path;
 			resolve_path_as_vfs_path = true;
+
+			if (launching_from_disc_archive)
+			{
+				sys_log.notice("Savestate: Loading iso archive");
+
+				load_iso(disc_info);
+				m_path = iso_device::virtual_device_name + "/" + argv[0];
+
+				resolve_path_as_vfs_path = false;
+			}
 		}
 		else if (m_path.starts_with(vfs_boot_prefix))
 		{
@@ -1405,6 +1444,34 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		}
 
 		const std::string resolved_path = GetCallbacks().resolve_path(m_path);
+		if (!launching_from_disc_archive && is_file_iso(m_path))
+		{
+			sys_log.notice("Loading iso archive '%s'", m_path);
+
+			load_iso(m_path);
+
+			launching_from_disc_archive = true;
+
+			std::string path = iso_device::virtual_device_name + "/";
+
+			// ISOs that are install discs will error if set to EBOOT.BIN
+			// so this should cover both of them
+			if (fs::exists(path + "PS3_GAME/USRDIR/EBOOT.BIN"))
+			{
+				path = path + "PS3_GAME/USRDIR/EBOOT.BIN";
+			}
+
+			m_path_real = m_path;
+			m_path = std::move(path);
+		}
+
+		sys_log.notice("Load: is iso archive = %d (m_path='%s')", launching_from_disc_archive, m_path);
+
+		if (launching_from_disc_archive)
+		{
+			m_dir = "/dev_bdvd/PS3_GAME/";
+			m_cat = "DG"sv;
+		}
 
 		const std::string elf_dir = fs::get_parent_dir(m_path);
 
@@ -1533,9 +1600,6 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		m_localized_title = std::string(psf::get_string(_psf, fmt::format("TITLE_%02d", static_cast<s32>(g_cfg.sys.language.get())), m_title));
 		sys_log.notice("Localized Title: %s", GetLocalizedTitle());
 
-		// Set RTM usage
-		g_use_rtm = utils::has_rtm() && (((utils::has_mpx() && !utils::has_tsx_force_abort()) && g_cfg.core.enable_TSX == tsx_usage::enabled) || g_cfg.core.enable_TSX == tsx_usage::forced);
-
 		{
 			// Log some extra info in case of boot
 #if defined(HAVE_VULKAN)
@@ -1546,25 +1610,12 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 #endif
 			sys_log.notice("Used configuration:\n%s\n", g_cfg.to_string());
 
-			if (g_use_rtm && (!utils::has_mpx() || utils::has_tsx_force_abort()))
-			{
-				sys_log.warning("TSX forced by User");
-			}
-
 			// Initialize patch engine
 			g_fxo->need<patch_engine>();
 
 			// Load patches from different locations
 			g_fxo->get<patch_engine>().append_global_patches();
 			g_fxo->get<patch_engine>().append_title_patches(m_title_id);
-		}
-
-		if (g_use_rtm)
-		{
-			// Update supplementary settings
-			const f64 _1ns = utils::get_tsc_freq() / 1000'000'000.;
-			g_rtm_tx_limit1 = static_cast<u64>(g_cfg.core.tx_limit1_ns * _1ns);
-			g_rtm_tx_limit2 = static_cast<u64>(g_cfg.core.tx_limit2_ns * _1ns);
 		}
 
 		// Set bdvd_dir
@@ -1595,8 +1646,14 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			}
 		}
 
+		// ISO PKG INSTALL HACK!
+		if (launching_from_disc_archive && fs::is_dir(m_path))
+		{
+			bdvd_dir = m_path;
+		}
+
 		// Special boot mode (directory scan)
-		if (fs::is_dir(m_path))
+		if (!launching_from_disc_archive && fs::is_dir(m_path))
 		{
 			m_state = system_state::ready;
 			GetCallbacks().on_ready();
@@ -1697,7 +1754,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				}
 			}
 
-			g_fxo->init<named_thread>("SPRX Loader"sv, [this, dir_queue]() mutable
+			g_fxo->init<named_thread>("SPRX Loader"sv, [this, dir_queue, is_fast = m_precompilation_option.is_fast]() mutable
 			{
 				std::vector<ppu_module<lv2_obj>*> mod_list;
 
@@ -1718,7 +1775,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 					return;
 				}
 
-				ppu_precompile(dir_queue, mod_list.empty() ? nullptr : &mod_list);
+				ppu_precompile(dir_queue, mod_list.empty() ? nullptr : &mod_list, is_fast);
 
 				if (Emu.IsStopped())
 				{
@@ -1788,6 +1845,10 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				sys_log.error("Failed to move disc game %s to '%s' (%s)", m_title_id, dst_dir, fs::g_tls_error);
 				return game_boot_result::wrong_disc_location;
 			}
+			else if (launching_from_disc_archive)
+			{
+				bdvd_dir = iso_device::virtual_device_name + "/";
+			}
 		}
 
 		if (bdvd_dir.empty() && disc.empty() && !is_disc_patch)
@@ -1802,6 +1863,15 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			// Load /dev_bdvd/ from game list if available
 			if (std::string game_path = m_games_config.get_path(m_title_id); !game_path.empty())
 			{
+				if (is_file_iso(game_path))
+				{
+					sys_log.notice("Loading iso archive for patch ('%s')", game_path);
+
+					load_iso(game_path);
+					launching_from_disc_archive = true;
+					game_path = iso_device::virtual_device_name + "/PS3_GAME/./";
+				}
+
 				if (game_path.ends_with("/./"))
 				{
 					// Marked as PS3_GAME directory
@@ -1866,8 +1936,8 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			// PS1 Classic located in dev_hdd0/game
 			sys_log.notice("PS1 Game: %s, %s", m_title_id, m_title);
 
-			const std::string tail = m_path.substr(hdd0_game.size());
-			const std::string dirname = fmt::trim_front(tail, fs::delim).substr(0, tail.find_first_of(fs::delim));
+			const std::string_view tail = std::string_view(m_path).substr(hdd0_game.size());
+			const std::string dirname = std::string(fmt::trim_front_sv(tail, fs::delim).substr(0, tail.find_first_of(fs::delim)));
 			const std::string game_path = "/dev_hdd0/game/" + dirname;
 
 			argv.resize(9);
@@ -1894,8 +1964,8 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			// PSP Remaster located in dev_hdd0/game
 			sys_log.notice("PSP Remaster Game: %s, %s", m_title_id, m_title);
 
-			const std::string tail = m_path.substr(hdd0_game.size());
-			const std::string dirname = fmt::trim_front(tail, fs::delim).substr(0, tail.find_first_of(fs::delim));
+			const std::string_view tail = std::string_view(m_path).substr(hdd0_game.size());
+			const std::string dirname = std::string(fmt::trim_front_sv(tail, fs::delim).substr(0, tail.find_first_of(fs::delim)));
 			const std::string game_path = "/dev_hdd0/game/" + dirname;
 
 			argv.resize(2);
@@ -1913,7 +1983,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				// Add HG games not in HDD0 to games.yml
 				[[maybe_unused]] const games_config::result res = m_games_config.add_external_hdd_game(m_title_id, game_dir);
 
-				const std::string dir = fmt::trim(game_dir.substr(fs::get_parent_dir_view(game_dir).size() + 1), fs::delim);
+				const std::string dir = std::string(fmt::trim_sv(std::string_view(game_dir).substr(fs::get_parent_dir_view(game_dir).size() + 1), fs::delim));
 				vfs::mount("/dev_hdd0/game/" + dir, game_dir + '/');
 			}
 		}
@@ -1929,21 +1999,28 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			}
 
 			// TODO: Verify timestamps and error codes with sys_fs
-			vfs::mount("/dev_bdvd", bdvd_dir);
-
 			vfs::mount("/dev_bdvd/PS3_GAME", inherited_ps3_game_path.empty() ? hdd0_game + m_path.substr(hdd0_game.size(), 10) : inherited_ps3_game_path);
 
 			const std::string new_ps3_game = vfs::get("/dev_bdvd/PS3_GAME");
 			sys_log.notice("Game: %s", new_ps3_game);
 
-			// Store /dev_bdvd/PS3_GAME location
-			if (games_config::result res = m_games_config.add_game(m_title_id, new_ps3_game + "/./"); res == games_config::result::success)
+			if (!new_ps3_game.starts_with(iso_device::virtual_device_name))
 			{
-				sys_log.notice("Registered BDVD/PS3_GAME game directory for title '%s': %s", m_title_id, new_ps3_game);
+				// Store /dev_bdvd/PS3_GAME location
+				if (games_config::result res = m_games_config.add_game(m_title_id, new_ps3_game + "/./"); res == games_config::result::success)
+				{
+					sys_log.notice("Registered BDVD/PS3_GAME game directory for title '%s': %s", m_title_id, new_ps3_game);
+				}
+				else if (res == games_config::result::failure)
+				{
+					sys_log.error("Failed to save BDVD/PS3_GAME location of title '%s' (error=%s)", m_title_id, fs::g_tls_error);
+				}
+
+				vfs::mount("/dev_bdvd", bdvd_dir);
 			}
-			else if (res == games_config::result::failure)
+			else
 			{
-				sys_log.error("Failed to save BDVD/PS3_GAME location of title '%s' (error=%s)", m_title_id, fs::g_tls_error);
+				vfs::mount("/dev_bdvd", iso_device::virtual_device_name + "/");
 			}
 		}
 		else if (disc.empty())
@@ -2076,28 +2153,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			}
 		}
 
-		// Check game updates
-		if (const std::string hdd0_boot = hdd0_game + m_title_id + "/USRDIR/EBOOT.BIN"; !m_ar
-				&& recursion_count == 0 && disc.empty() && !bdvd_dir.empty() && !m_title_id.empty()
-				&& resolved_path == GetCallbacks().resolve_path(vfs::get("/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"))
-				&& resolved_path != GetCallbacks().resolve_path(hdd0_boot) && fs::is_file(hdd0_boot))
+		// ISO has no USRDIR/EBOOT.BIN, and we've examined its PKGDIR and extras.
+		// time to wrap up
+		if (launching_from_disc_archive && fs::is_dir(m_path))
 		{
-			if (const psf::registry update_sfo = psf::load(hdd0_game + m_title_id + "/PARAM.SFO").sfo;
-				psf::get_string(update_sfo, "TITLE_ID") == m_title_id && psf::get_string(update_sfo, "CATEGORY") == "GD")
-			{
-				// Booting game update
-				sys_log.success("Updates found at /dev_hdd0/game/%s/", m_title_id);
-				m_path = hdd0_boot;
-
-				const game_boot_result boot_result = Load(m_title_id, true, recursion_count + 1);
-				if (boot_result == game_boot_result::no_errors)
-				{
-					return game_boot_result::no_errors;
-				}
-
-				sys_log.error("Failed to boot update at \"%s\", game update may be corrupted! Consider uninstalling or reinstalling it. (reason: %s)", m_path, boot_result);
-				return boot_result;
-			}
+			return game_boot_result::nothing_to_boot;
 		}
 
 		// Check firmware version
@@ -2136,12 +2196,6 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		// Replace newlines with spaces
 		std::replace(m_title.begin(), m_title.end(), '\n', ' ');
 		std::replace(m_localized_title.begin(), m_localized_title.end(), '\n', ' ');
-
-		// Mount /host_root/ if necessary (special value)
-		if (g_cfg.vfs.host_root)
-		{
-			vfs::mount("/host_root", "/");
-		}
 
 		// Open SELF or ELF
 		std::string elf_path = m_path;
@@ -2207,9 +2261,41 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			return game_boot_result::decryption_error;
 		}
 
+		// Check EBOOT.BIN (before updates - disc games)
+		ppu_exec_object ppu_exec;
+		ppu_exec.open(elf_file);
+
+		// Check game updates
+		if (const std::string hdd0_boot = hdd0_game + m_title_id + "/USRDIR/EBOOT.BIN"; !m_ar
+				&& recursion_count == 0 && disc.empty() && !bdvd_dir.empty() && !m_title_id.empty()
+				&& (launching_from_disc_archive ||
+					resolved_path == GetCallbacks().resolve_path(vfs::get("/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN")))
+				&& resolved_path != GetCallbacks().resolve_path(hdd0_boot) && fs::is_file(hdd0_boot)
+				&& ppu_exec == elf_error::ok)
+		{
+			if (const psf::registry update_sfo = psf::load(hdd0_game + m_title_id + "/PARAM.SFO").sfo;
+				psf::get_string(update_sfo, "TITLE_ID") == m_title_id && psf::get_string(update_sfo, "CATEGORY") == "GD")
+			{
+				ppu_exec = {};
+				elf_file.close();
+
+				// Booting game update
+				sys_log.success("Updates found at /dev_hdd0/game/%s/", m_title_id);
+				m_path = hdd0_boot;
+
+				const game_boot_result boot_result = Load(m_title_id, true, recursion_count + 1);
+				if (boot_result == game_boot_result::no_errors)
+				{
+					return game_boot_result::no_errors;
+				}
+
+				sys_log.error("Failed to boot update at \"%s\", game update may be corrupted! Consider uninstalling or reinstalling it. (reason: %s)", m_path, boot_result);
+				return boot_result;
+			}
+		}
+
 		m_state = system_state::ready;
 
-		ppu_exec_object ppu_exec;
 		ppu_prx_object ppu_prx;
 		ppu_rel_object ppu_rel;
 		spu_exec_object spu_exec;
@@ -2217,19 +2303,25 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 
 		vm::init();
 
-		if (m_ar)
+		if (ppu_exec == elf_error::ok)
 		{
-			vm::load(*m_ar);
-		}
+			if (m_ar)
+			{
+				vm::load(*m_ar);
+			}
 
-		if (!hdd1.empty())
-		{
-			vfs::mount("/dev_hdd1", hdd1);
-			sys_log.notice("Hdd1: %s", vfs::get("/dev_hdd1"));
-		}
+			// Mount /host_root/ if necessary (special value)
+			if (g_cfg.vfs.host_root)
+			{
+				vfs::mount("/host_root", "/");
+			}
 
-		if (ppu_exec.open(elf_file) == elf_error::ok)
-		{
+			if (!hdd1.empty())
+			{
+				vfs::mount("/dev_hdd1", hdd1);
+				sys_log.notice("Hdd1: %s", vfs::get("/dev_hdd1"));
+			}
+
 			// PS3 executable
 			GetCallbacks().on_ready();
 
@@ -2258,10 +2350,10 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				auto unescape = [](std::string_view path)
 				{
 					// Unescape from host FS
-					std::vector<std::string> escaped = fmt::split(path, {std::string_view{&fs::delim[0], 1}, std::string_view{&fs::delim[1], 1}});
+					const std::vector<std::string_view> escaped = fmt::split_sv(path, {std::string_view{&fs::delim[0], 1}, std::string_view{&fs::delim[1], 1}});
 					std::vector<std::string> result;
-					for (auto& sv : escaped)
-						result.emplace_back(vfs::unescape(sv));
+					for (const auto& sv : escaped)
+						result.push_back(vfs::unescape(sv));
 
 					return fmt::merge(result, "/");
 				};
@@ -2288,8 +2380,9 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				else if (!bdvd_dir.empty() && fs::is_dir(bdvd_dir))
 				{
 					// Disc games are on /dev_bdvd/
-					const usz pos = resolved_path.rfind(m_game_dir);
-					argv[0] = "/dev_bdvd/PS3_GAME/" + unescape(resolved_path.substr(pos + m_game_dir.size() + 1));
+					const std::string& disc_path = launching_from_disc_archive ? m_path : resolved_path;
+					const usz pos = disc_path.rfind(m_game_dir);
+					argv[0] = "/dev_bdvd/PS3_GAME/" + unescape(disc_path.substr(pos + m_game_dir.size() + 1));
 					m_dir = "/dev_bdvd/PS3_GAME/";
 				}
 				else if (from_dev_flash)
@@ -2308,7 +2401,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 						game_dir = game_dir.substr(0, game_dir.size() - 4);
 					}
 
-					const std::string dir = fmt::trim(game_dir.substr(fs::get_parent_dir_view(game_dir).size() + 1), fs::delim);
+					const std::string dir = std::string(fmt::trim_sv(std::string_view(game_dir).substr(fs::get_parent_dir_view(game_dir).size() + 1), fs::delim));
 
 					m_dir = "/dev_hdd0/game/" + dir + '/';
 					argv[0] = m_dir + unescape(resolved_path.substr(GetCallbacks().resolve_path(game_dir).size()));
@@ -2377,6 +2470,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		else if (ppu_prx.open(elf_file) == elf_error::ok)
 		{
 			// PPU PRX
+			m_ar.reset();
 			GetCallbacks().on_ready();
 			g_fxo->init(false);
 			ppu_load_prx(ppu_prx, false, m_path);
@@ -2385,6 +2479,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		else if (spu_exec.open(elf_file) == elf_error::ok)
 		{
 			// SPU executable
+			m_ar.reset();
 			GetCallbacks().on_ready();
 			g_fxo->init(false);
 			spu_load_exec(spu_exec);
@@ -2393,6 +2488,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		else if (spu_rel.open(elf_file) == elf_error::ok)
 		{
 			// SPU linker file
+			m_ar.reset();
 			GetCallbacks().on_ready();
 			g_fxo->init(false);
 			spu_load_rel_exec(spu_rel);
@@ -2401,6 +2497,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		else if (ppu_rel.open(elf_file) == elf_error::ok)
 		{
 			// PPU linker file
+			m_ar.reset();
 			GetCallbacks().on_ready();
 			g_fxo->init(false);
 			ppu_load_rel_exec(ppu_rel);
@@ -2472,6 +2569,7 @@ void Emulator::Run(bool start_playtime)
 	rpcs3::utils::configure_logs();
 
 	m_state = system_state::starting;
+	m_state.notify_all();
 
 	if (g_cfg.misc.prevent_display_sleep)
 	{
@@ -3231,6 +3329,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 		read_used_savestate_versions();
 		m_savestate_extension_flags1 = {};
 		m_emu_state_close_pending = false;
+		m_precompilation_option = {};
 
 		// Enable logging
 		rpcs3::utils::configure_logs(true);
@@ -3254,6 +3353,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 	}
 
 	// Signal threads
+	m_state.notify_all();
 
 	if (auto rsx = g_fxo->try_get<rsx::thread>())
 	{
@@ -3293,7 +3393,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 
 			bool is_being_held_longer = false;
 
-			for (int i = 0; !*join_ended && thread_ctrl::state() != thread_state::aborting;)
+			for (int i = 0; !*join_ended && thread_ctrl::state() != thread_state::aborting; i++)
 			{
 				if (g_watchdog_hold_ctr)
 				{
@@ -3354,7 +3454,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 		{
 			if (spu.first->pc != spu.second || spu.first->unsavable)
 			{
-				std::string dump; 
+				std::string dump;
 				spu.first->dump_all(dump);
 
 				sys_log.error("SPU thread continued after being paused. (old_pc=0x%x, pc=0x%x, unsavable=%d)", spu.second, spu.first->pc, spu.first->unsavable);
@@ -3532,7 +3632,18 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 
 				ar(std::array<u8, 32>{}); // Reserved for future use
 
-				if (auto dir = vfs::get("/dev_bdvd/PS3_GAME"); fs::is_dir(dir) && !fs::is_file(fs::get_parent_dir(dir) + "/PS3_DISC.SFB"))
+				// Game mounted from archive
+				if (m_path.starts_with(iso_device::virtual_device_name + "/"))
+				{
+					const auto device = fs::get_virtual_device(iso_device::virtual_device_name + "/");
+					ensure(device);
+
+					const auto iso_dev = dynamic_cast<const iso_device*>(device.get());
+
+					ar(m_path.substr(iso_device::virtual_device_name.size() + 1));
+					ar(iso_dev->get_loaded_iso());
+				}
+				else if (auto dir = vfs::get("/dev_bdvd/PS3_GAME"); fs::is_dir(dir) && !fs::is_file(fs::get_parent_dir(dir) + "/PS3_DISC.SFB"))
 				{
 					// Fake /dev_bdvd/PS3_GAME detected, use HDD0 for m_path restoration
 					ensure(vfs::unmount("/dev_bdvd/PS3_GAME"));
@@ -3824,6 +3935,12 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 			read_used_savestate_versions();
 			m_savestate_extension_flags1 = {};
 			m_emu_state_close_pending = false;
+			m_precompilation_option = {};
+
+			if (!m_continuous_mode)
+			{
+				unload_iso();
+			}
 
 			initialize_timebased_time(0, true);
 
@@ -3865,6 +3982,18 @@ game_boot_result Emulator::Restart(bool graceful)
 
 	Emu.after_kill_callback = [this]
 	{
+		// Reset boot path in case of ISO
+		if (m_path.starts_with(iso_device::virtual_device_name))
+		{
+			sys_log.notice("Continuous boot: Resetting boot path from '%s' to '%s'", m_path, m_path_real);
+			ensure(!m_path_real.empty());
+			ensure(!m_path_real.starts_with(iso_device::virtual_device_name));
+			m_path = m_path_real;
+		}
+
+		// Allow Boot (guarded by GracefulShutdown, which is the scope of this callback)
+		m_restrict_emu_state_change = 0;
+
 		// Reload with prior configs.
 		if (const auto error = Load(m_title_id); error != game_boot_result::no_errors)
 		{
@@ -4024,12 +4153,17 @@ u32 Emulator::AddGamesFromDir(const std::string& path)
 		{
 			auto dir_entry = std::move(*path_it);
 
-			if (!dir_entry.is_directory || dir_entry.name == "." || dir_entry.name == "..")
+			if (dir_entry.name == "." || dir_entry.name == "..")
 			{
 				continue;
 			}
 
 			const std::string dir_path = path + '/' + dir_entry.name;
+
+			if (!dir_entry.is_directory && !is_file_iso(dir_path))
+			{
+				continue;
+			}
 
 			if (const game_boot_result error = AddGame(dir_path); error == game_boot_result::no_errors)
 			{
@@ -4128,10 +4262,17 @@ game_boot_result Emulator::AddGameToYml(const std::string& path)
 		return error;
 	}
 
+	std::unique_ptr<iso_archive> archive;
+	if (is_file_iso(path))
+	{
+		archive = std::make_unique<iso_archive>(path);
+	}
+
 	// Load PARAM.SFO
 	const std::string elf_dir = fs::get_parent_dir(path);
-	std::string sfo_dir = rpcs3::utils::get_sfo_dir_from_game_path(fs::get_parent_dir(elf_dir));
-	const psf::registry _psf = psf::load_object(sfo_dir + "/PARAM.SFO");
+	std::string sfo_dir = archive ? "PS3_GAME" : rpcs3::utils::get_sfo_dir_from_game_path(fs::get_parent_dir(elf_dir));
+	const std::string sfo_path = sfo_dir + "/PARAM.SFO";
+	const psf::registry _psf = archive ? archive->open_psf(sfo_path) : psf::load_object(sfo_path);
 
 	const std::string title_id = std::string(psf::get_string(_psf, "TITLE_ID"));
 	const std::string cat = std::string(psf::get_string(_psf, "CATEGORY"));
@@ -4152,6 +4293,23 @@ game_boot_result Emulator::AddGameToYml(const std::string& path)
 	{
 		sys_log.notice("Can not add game data to games.yml. (path=%s, title_id=%s, category=%s)", path, title_id, cat);
 		return game_boot_result::invalid_file_or_folder;
+	}
+
+	// Add ISO game
+	if (archive)
+	{
+		if (cat == "DG")
+		{
+			std::string iso_path = path;
+			switch (m_games_config.add_external_hdd_game(title_id, iso_path))
+			{
+				case games_config::result::failure: return game_boot_result::generic_error;
+				case games_config::result::success: return game_boot_result::no_errors;
+				case games_config::result::exists: return game_boot_result::already_added;
+			}
+
+			return game_boot_result::generic_error;
+		}
 	}
 
 	// Set bdvd_dir
@@ -4316,7 +4474,7 @@ const std::string& Emulator::GetFakeCat() const
 	{
 		const std::string mount_point = vfs::get("/dev_bdvd");
 
-		if (mount_point.empty() || !IsPathInsideDir(m_path, mount_point))
+		if (mount_point.empty() || (!IsPathInsideDir(m_path, mount_point) && !m_path.starts_with(iso_device::virtual_device_name)))
 		{
 			static const std::string s_hg = "HG";
 			return s_hg;
@@ -4484,7 +4642,7 @@ game_boot_result Emulator::InsertDisc(const std::string& path)
 	else
 	{
 		// TODO: find out where other discs are mounted
-		sys_log.todo("Mounting non-ps2/ps3 disc in dev_bdvd. Is this correct? (path='%s')", disc_root);
+		sys_log.todo("Mounting non-PS2/PS3 disc in dev_bdvd. Is this correct? (path='%s')", disc_root);
 		ensure(vfs::mount("/dev_bdvd", disc_root));
 	}
 

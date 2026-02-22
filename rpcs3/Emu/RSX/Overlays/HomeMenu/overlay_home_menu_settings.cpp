@@ -80,9 +80,17 @@ namespace rsx
 			add_checkbox(&g_cfg.io.keep_pads_connected, localized_string_id::HOME_MENU_SETTINGS_INPUT_KEEP_PADS_CONNECTED);
 			add_checkbox(&g_cfg.io.show_move_cursor, localized_string_id::HOME_MENU_SETTINGS_INPUT_SHOW_PS_MOVE_CURSOR);
 
-			if (g_cfg.io.camera == camera_handler::qt)
+			switch (g_cfg.io.camera)
 			{
+	#ifdef HAVE_SDL3
+			case camera_handler::sdl:
+	#endif
+			case camera_handler::qt:
 				add_dropdown(&g_cfg.io.camera_flip_option, localized_string_id::HOME_MENU_SETTINGS_INPUT_CAMERA_FLIP);
+				break;
+			case camera_handler::fake:
+			case camera_handler::null:
+				break;
 			}
 
 			add_dropdown(&g_cfg.io.pad_mode, localized_string_id::HOME_MENU_SETTINGS_INPUT_PAD_MODE);
@@ -104,6 +112,7 @@ namespace rsx
 			add_checkbox(&g_cfg.misc.show_pressure_intensity_toggle_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PRESSURE_INTENSITY_TOGGLE_HINT);
 			add_checkbox(&g_cfg.misc.show_analog_limiter_toggle_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_ANALOG_LIMITER_TOGGLE_HINT);
 			add_checkbox(&g_cfg.misc.show_mouse_and_keyboard_toggle_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_MOUSE_AND_KB_TOGGLE_HINT);
+			add_checkbox(&g_cfg.video.record_with_overlays, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_RECORD_WITH_OVERLAYS);
 
 			apply_layout();
 		}

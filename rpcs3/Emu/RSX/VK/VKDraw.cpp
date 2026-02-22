@@ -65,38 +65,55 @@ namespace vk
 		case VK_IMAGE_LAYOUT_GENERAL:
 		case VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT:
 			ensure(sampler_state->upload_context == rsx::texture_upload_context::framebuffer_storage);
-			if (!sampler_state->is_cyclic_reference)
+			if (sampler_state->is_cyclic_reference) [[ unlikely ]]
 			{
-				// This was used in a cyclic ref before, but is missing a barrier
-				// No need for a full stall, use a custom barrier instead
-				VkPipelineStageFlags src_stage;
-				VkAccessFlags src_access;
-				if (raw->aspect() == VK_IMAGE_ASPECT_COLOR_BIT)
-				{
-					src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-					src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-				}
-				else
-				{
-					src_stage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-					src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-				}
-
-				vk::insert_image_memory_barrier(
-					cmd,
-					raw->value,
-					raw->current_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					src_stage, dst_stage,
-					src_access, VK_ACCESS_SHADER_READ_BIT,
-					{ raw->aspect(), 0, 1, 0, 1 });
-
-				raw->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				// Nothing to do
+				break;
 			}
+
+			// This was used in a cyclic ref before, but is missing a barrier
+			// No need for a full stall, use a custom barrier instead
+			VkPipelineStageFlags src_stage;
+			VkAccessFlags src_access, dst_access;
+			if (raw->aspect() == VK_IMAGE_ASPECT_COLOR_BIT)
+			{
+				src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+				src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+				dst_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+				dst_stage |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+			}
+			else
+			{
+				src_stage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+				src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+				dst_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+				dst_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			}
+
+			vk::insert_image_memory_barrier(
+				cmd,
+				raw->value,
+				raw->current_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				src_stage, dst_stage,
+				src_access, dst_access,
+				{ raw->aspect(), 0, 1, 0, 1 });
+
+			raw->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			break;
 		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
 		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 			ensure(sampler_state->upload_context == rsx::texture_upload_context::framebuffer_storage);
-			raw->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			if (!sampler_state->is_cyclic_reference) [[ likely ]]
+			{
+				// Standard pre-read barrier.
+				raw->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+				break;
+			}
+
+			// Normally this shouldn't happen. But that is only guaranteed if the attachment state never changes outside of RTT rebind interrupts.
+			// If the shader changes between binds to "disable" the cyclic nature, we could end up here.
+			// Draw 1 (cyllic) -> texture_barrier -> Draw 2 (no textures) -> attachment_optimal -> Draw 3 (cylic again, no new data) -> incorrect layout.
+			vk::as_rtt(raw)->texture_barrier(cmd);
 			break;
 		}
 	}
@@ -124,6 +141,17 @@ VkRenderPass VKGSRender::get_render_pass()
 	}
 
 	return m_cached_renderpass;
+}
+
+void VKGSRender::invalidate_render_pass()
+{
+	// Regenerate renderpass key for the next draw call
+	if (const auto key = vk::get_renderpass_key(m_fbo_images, m_current_renderpass_key);
+		key != m_current_renderpass_key)
+	{
+		m_current_renderpass_key = key;
+		m_cached_renderpass = VK_NULL_HANDLE;
+	}
 }
 
 void VKGSRender::update_draw_state()
@@ -247,7 +275,7 @@ void VKGSRender::load_texture_env()
 
 	auto get_border_color = [&](const rsx::Texture auto& tex)
 	{
-		return  m_device->get_custom_border_color_support().require_border_color_remap
+		return m_device->get_custom_border_color_support().require_border_color_remap
 			? tex.remapped_border_color()
 			: rsx::decode_border_color(tex.border_color());
 	};
@@ -497,24 +525,20 @@ void VKGSRender::load_texture_env()
 	if (check_for_cyclic_refs)
 	{
 		// Regenerate renderpass key
-		if (const auto key = vk::get_renderpass_key(m_fbo_images, m_current_renderpass_key);
-			key != m_current_renderpass_key)
-		{
-			m_current_renderpass_key = key;
-			m_cached_renderpass = VK_NULL_HANDLE;
-		}
+		invalidate_render_pass();
 	}
 
-	if (g_cfg.video.vk.asynchronous_texture_streaming)
+	if (backend_config.supports_asynchronous_compute)
 	{
 		// We have to do this here, because we have to assume the CB will be dumped
-		auto& async_task_scheduler = g_fxo->get<vk::AsyncTaskScheduler>();
+		auto async_task_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>();
 
-		if (async_task_scheduler.is_recording() &&
-			!async_task_scheduler.is_host_mode())
+		if (async_task_scheduler &&
+			async_task_scheduler->is_recording() &&
+			!async_task_scheduler->is_host_mode())
 		{
 			// Sync any async scheduler tasks
-			if (auto ev = async_task_scheduler.get_primary_sync_label())
+			if (auto ev = async_task_scheduler->get_primary_sync_label())
 			{
 				ev->gpu_wait(*m_current_command_buffer, m_async_compute_dependency_info);
 			}
@@ -553,7 +577,7 @@ bool VKGSRender::bind_texture_env()
 
 		if (view) [[likely]]
 		{
-			m_program->bind_uniform({ fs_sampler_handles[i]->value, view->value, view->image()->current_layout },
+			m_program->bind_uniform({ *view, *fs_sampler_handles[i] },
 				vk::glsl::binding_set_index_fragment,
 				m_fs_binding_table->ftex_location[i]);
 
@@ -574,7 +598,7 @@ bool VKGSRender::bind_texture_env()
 						VK_BORDER_COLOR_INT_OPAQUE_BLACK);
 				}
 
-				m_program->bind_uniform({ m_stencil_mirror_sampler->value, stencil_view->value, stencil_view->image()->current_layout },
+				m_program->bind_uniform({ *stencil_view, *m_stencil_mirror_sampler },
 					vk::glsl::binding_set_index_fragment,
 					m_fs_binding_table->ftex_stencil_location[i]);
 			}
@@ -582,13 +606,14 @@ bool VKGSRender::bind_texture_env()
 		else
 		{
 			const VkImageViewType view_type = vk::get_view_type(current_fragment_program.get_texture_dimension(i));
-			m_program->bind_uniform({ vk::null_sampler(), vk::null_image_view(*m_current_command_buffer, view_type)->value, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			const VkDescriptorImageInfoEx desc = { *vk::null_image_view(*m_current_command_buffer, view_type), vk::null_sampler() };
+			m_program->bind_uniform(desc,
 				vk::glsl::binding_set_index_fragment,
 				m_fs_binding_table->ftex_location[i]);
 
 			if (current_fragment_program.texture_state.redirected_textures & (1 << i))
 			{
-				m_program->bind_uniform({ vk::null_sampler(), vk::null_image_view(*m_current_command_buffer, view_type)->value, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+				m_program->bind_uniform(desc,
 					vk::glsl::binding_set_index_fragment,
 					m_fs_binding_table->ftex_stencil_location[i]);
 			}
@@ -603,7 +628,7 @@ bool VKGSRender::bind_texture_env()
 		if (!rsx::method_registers.vertex_textures[i].enabled())
 		{
 			const auto view_type = vk::get_view_type(current_vertex_program.get_texture_dimension(i));
-			m_program->bind_uniform({ vk::null_sampler(), vk::null_image_view(*m_current_command_buffer, view_type)->value, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			m_program->bind_uniform({ *vk::null_image_view(*m_current_command_buffer, view_type), vk::null_sampler() },
 				vk::glsl::binding_set_index_vertex,
 				m_vs_binding_table->vtex_location[i]);
 
@@ -626,7 +651,7 @@ bool VKGSRender::bind_texture_env()
 			rsx_log.error("Texture upload failed to vtexture index %d. Binding null sampler.", i);
 			const auto view_type = vk::get_view_type(current_vertex_program.get_texture_dimension(i));
 
-			m_program->bind_uniform({ vk::null_sampler(), vk::null_image_view(*m_current_command_buffer, view_type)->value, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			m_program->bind_uniform({ *vk::null_image_view(*m_current_command_buffer, view_type), vk::null_sampler() },
 				vk::glsl::binding_set_index_vertex,
 				m_vs_binding_table->vtex_location[i]);
 
@@ -635,7 +660,7 @@ bool VKGSRender::bind_texture_env()
 
 		validate_image_layout_for_read_access(*m_current_command_buffer, image_ptr, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, sampler_state);
 
-		m_program->bind_uniform({ vs_sampler_handles[i]->value, image_ptr->value, image_ptr->image()->current_layout },
+		m_program->bind_uniform({ *image_ptr, *vs_sampler_handles[i] },
 			vk::glsl::binding_set_index_vertex,
 			m_vs_binding_table->vtex_location[i]);
 	}
@@ -651,8 +676,12 @@ bool VKGSRender::bind_interpreter_texture_env()
 		return false;
 	}
 
-	std::array<VkDescriptorImageInfo, 68> texture_env;
-	VkDescriptorImageInfo fallback = { vk::null_sampler(), vk::null_image_view(*m_current_command_buffer, VK_IMAGE_VIEW_TYPE_1D)->value, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	std::array<VkDescriptorImageInfoEx, 68> texture_env;
+	VkDescriptorImageInfoEx fallback =
+	{
+		*vk::null_image_view(*m_current_command_buffer, VK_IMAGE_VIEW_TYPE_1D),
+		vk::null_sampler()
+	};
 
 	auto start = texture_env.begin();
 	auto end = start;
@@ -708,7 +737,7 @@ bool VKGSRender::bind_interpreter_texture_env()
 		{
 			const int offsets[] = { 0, 16, 48, 32 };
 			auto& sampled_image_info = texture_env[offsets[static_cast<u32>(sampler_state->image_type)] + i];
-			sampled_image_info = { fs_sampler_handles[i]->value, view->value, view->image()->current_layout };
+			sampled_image_info = { *view, *fs_sampler_handles[i] };
 		}
 	}
 
@@ -811,8 +840,8 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		m_current_command_buffer->flags |= (vk::command_buffer::cb_has_occlusion_task | vk::command_buffer::cb_has_open_query);
 	}
 
-	auto persistent_buffer = m_persistent_attribute_storage ? m_persistent_attribute_storage->value : null_buffer_view->value;
-	auto volatile_buffer = m_volatile_attribute_storage ? m_volatile_attribute_storage->value : null_buffer_view->value;
+	VkDescriptorBufferViewEx persistent_buffer = m_persistent_attribute_storage ? *m_persistent_attribute_storage : *null_buffer_view;
+	VkDescriptorBufferViewEx volatile_buffer = m_volatile_attribute_storage ? *m_volatile_attribute_storage : *null_buffer_view;
 	bool update_descriptors = false;
 
 	if (m_current_draw.subdraw_id == 0)
@@ -820,30 +849,17 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		update_descriptors = true;
 
 		// Allocate stream layout memory for this batch
-		m_vertex_layout_stream_info.range = rsx::method_registers.current_draw_clause.pass_count() * 128;
-		m_vertex_layout_stream_info.offset = m_vertex_layout_ring_info.alloc<256>(m_vertex_layout_stream_info.range);
-
-		if (vk::test_status_interrupt(vk::heap_changed))
-		{
-			if (m_vertex_layout_storage &&
-				m_vertex_layout_storage->info.buffer != m_vertex_layout_ring_info.heap->value)
-			{
-				vk::get_resource_manager()->dispose(m_vertex_layout_storage);
-			}
-
-			vk::clear_status_interrupt(vk::heap_changed);
-		}
+		const u64 alloc_size = rsx::method_registers.current_draw_clause.pass_count() * 168;
+		m_vertex_layout_dynamic_offset = m_vertex_layout_ring_info.alloc<8>(alloc_size);
 	}
 
 	// Update vertex fetch parameters
 	update_vertex_env(sub_index, upload_info);
 
-	ensure(m_vertex_layout_storage);
 	if (update_descriptors)
 	{
 		m_program->bind_uniform(persistent_buffer, vk::glsl::binding_set_index_vertex, m_vs_binding_table->vertex_buffers_location);
 		m_program->bind_uniform(volatile_buffer, vk::glsl::binding_set_index_vertex, m_vs_binding_table->vertex_buffers_location + 1);
-		m_program->bind_uniform(m_vertex_layout_storage->value, vk::glsl::binding_set_index_vertex, m_vs_binding_table->vertex_buffers_location + 2);
 	}
 
 	bool reload_state = (!m_current_draw.subdraw_id++);
@@ -1051,6 +1067,18 @@ void VKGSRender::end()
 	if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
 	{
 		ds->write_barrier(*m_current_command_buffer);
+
+		if (m_graphics_state.test(rsx::zeta_address_cyclic_barrier) &&
+			ds->current_layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+		{
+			// We actually need to end the subpass as a minimum. Without this, early-Z optimiazations in following draws will clobber reads from previous draws and cause flickering.
+			// Since we're ending the subpass, might as well restore DCC/HiZ for extra performance
+			ds->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+			ds->reset_surface_counters();
+
+			// Regenerate render pass key
+			invalidate_render_pass();
+		}
 	}
 
 	for (auto &rtt : m_rtts.m_bound_render_targets)
@@ -1060,6 +1088,8 @@ void VKGSRender::end()
 			surface->write_barrier(*m_current_command_buffer);
 		}
 	}
+
+	m_graphics_state.clear(rsx::zeta_address_cyclic_barrier);
 
 	m_frame_stats.setup_time += m_profiler.duration();
 

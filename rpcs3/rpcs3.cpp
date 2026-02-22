@@ -26,6 +26,7 @@
 #include "Utilities/sema.h"
 #include "Utilities/date_time.h"
 #include "util/console.h"
+#include "util/asm.hpp"
 #include "Crypto/decrypt_binaries.h"
 #ifdef _WIN32
 #include "module_verifier.hpp"
@@ -435,6 +436,12 @@ QCoreApplication* create_application(std::span<char* const> qt_argv)
 	{
 		qputenv("QT_AUTO_SCREEN_SCALE_FACTOR", "0");
 	}
+#elif __APPLE__
+	// set the QT_MTL_NO_TRANSACTION variable in order to prevent Qt GUI freeze
+	qputenv("QT_MTL_NO_TRANSACTION", "1");
+
+	// set the QT_MAC_NO_CONTAINER_LAYER variable in order to prevent swapchain crash
+	qputenv("QT_MAC_NO_CONTAINER_LAYER", "1");
 #endif
 
 	bool use_high_dpi = true;
@@ -674,6 +681,10 @@ int run_rpcs3(int argc, char** argv)
 
 		logs::set_init({std::move(ver), std::move(sys), std::move(os), std::move(qt), std::move(time)});
 	}
+
+#ifdef ARCH_ARM64
+	utils::init_arm_timer_scale();
+#endif
 
 #ifdef _WIN32
 	sys_log.notice("Initialization times before main(): %fGc", intro_cycles / 1000000000.);

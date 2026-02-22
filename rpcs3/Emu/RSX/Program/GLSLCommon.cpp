@@ -177,13 +177,13 @@ namespace glsl
 			enabled_options.push_back("_ENABLE_LIT_EMULATION");
 		}
 
-		OS << "#define _select mix\n";
-		OS << "#define _saturate(x) clamp(x, 0., 1.)\n";
-		OS << "#define _get_bits(x, off, count) bitfieldExtract(x, off, count)\n";
-		OS << "#define _set_bits(x, y, off, count) bitfieldInsert(x, y, off, count)\n";
-		OS << "#define _test_bit(x, y) (_get_bits(x, y, 1) != 0)\n";
-		OS << "#define _rand(seed) fract(sin(dot(seed.xy, vec2(12.9898f, 78.233f))) * 43758.5453f)\n\n";
-
+		if (props.require_clip_plane_functions)
+		{
+			OS <<
+				"#define CLIP_PLANE_DISABLED 1\n"
+				"#define is_user_clip_enabled(idx) (_get_bits(get_user_clip_config(), idx * 2, 2) != CLIP_PLANE_DISABLED)\n"
+				"#define user_clip_factor(idx) (float(_get_bits(get_user_clip_config(), idx * 2, 2)) - 1.f)\n\n";
+		}
 
 		if (props.domain == glsl::program_domain::glsl_fragment_program)
 		{
@@ -216,12 +216,12 @@ namespace glsl
 				enabled_options.push_back("_32_BIT_OUTPUT");
 			}
 
-			if (!props.fp32_outputs)
+			if (props.ROP_sRGB_packing)
 			{
 				enabled_options.push_back("_ENABLE_FRAMEBUFFER_SRGB");
 			}
 
-			if (props.disable_early_discard)
+			if (props.disable_early_discard && props.ROP_discard)
 			{
 				enabled_options.push_back("_DISABLE_EARLY_DISCARD");
 			}
@@ -231,7 +231,15 @@ namespace glsl
 				enabled_options.push_back("_ENABLE_ROP_OUTPUT_ROUNDING");
 			}
 
-			enabled_options.push_back("_ENABLE_POLYGON_STIPPLE");
+			if (props.ROP_alpha_test)
+			{
+				enabled_options.push_back("_ENABLE_ALPHA_TEST");
+			}
+
+			if (props.ROP_polygon_stipple_test)
+			{
+				enabled_options.push_back("_ENABLE_POLYGON_STIPPLE");
+			}
 		}
 
 		// Import common header
@@ -276,12 +284,12 @@ namespace glsl
 			return;
 		}
 
-		if (props.emulate_coverage_tests)
+		if (props.ROP_alpha_to_coverage_test)
 		{
-			enabled_options.push_back("_EMULATE_COVERAGE_TEST");
+			enabled_options.push_back("_ENABLE_ALPHA_TO_COVERAGE_TEST");
 		}
 
-		if (!props.fp32_outputs || props.require_linear_to_srgb)
+		if (props.ROP_sRGB_packing || props.require_linear_to_srgb)
 		{
 			enabled_options.push_back("_ENABLE_LINEAR_TO_SRGB");
 		}
@@ -294,6 +302,11 @@ namespace glsl
 		if (props.require_wpos)
 		{
 			enabled_options.push_back("_ENABLE_WPOS");
+		}
+
+		if (props.ROP_alpha_test || (props.require_msaa_ops && props.require_tex_shadow_ops))
+		{
+			enabled_options.push_back("_ENABLE_COMPARISON_FUNC");
 		}
 
 		if (props.require_fog_read)
@@ -324,21 +337,21 @@ namespace glsl
 			// Declare special texture control flags
 			program_common::define_glsl_constants<rsx::texture_control_bits>(OS,
 			{
-				{ "GAMMA_R_BIT " , rsx::texture_control_bits::GAMMA_R },
-				{ "GAMMA_G_BIT " , rsx::texture_control_bits::GAMMA_G },
-				{ "GAMMA_B_BIT " , rsx::texture_control_bits::GAMMA_B },
-				{ "GAMMA_A_BIT " , rsx::texture_control_bits::GAMMA_A },
-				{ "EXPAND_R_BIT" , rsx::texture_control_bits::EXPAND_R },
-				{ "EXPAND_G_BIT" , rsx::texture_control_bits::EXPAND_G },
-				{ "EXPAND_B_BIT" , rsx::texture_control_bits::EXPAND_B },
-				{ "EXPAND_A_BIT" , rsx::texture_control_bits::EXPAND_A },
-				{ "SEXT_R_BIT" , rsx::texture_control_bits::SEXT_R },
-				{ "SEXT_G_BIT" , rsx::texture_control_bits::SEXT_G },
-				{ "SEXT_B_BIT" , rsx::texture_control_bits::SEXT_B },
-				{ "SEXT_A_BIT" , rsx::texture_control_bits::SEXT_A },
-				{ "WRAP_S_BIT", rsx::texture_control_bits::WRAP_S },
-				{ "WRAP_T_BIT", rsx::texture_control_bits::WRAP_T },
-				{ "WRAP_R_BIT", rsx::texture_control_bits::WRAP_R },
+				{ "GAMMA_R_BIT ", rsx::texture_control_bits::GAMMA_R },
+				{ "GAMMA_G_BIT ", rsx::texture_control_bits::GAMMA_G },
+				{ "GAMMA_B_BIT ", rsx::texture_control_bits::GAMMA_B },
+				{ "GAMMA_A_BIT ", rsx::texture_control_bits::GAMMA_A },
+				{ "EXPAND_R_BIT", rsx::texture_control_bits::EXPAND_R },
+				{ "EXPAND_G_BIT", rsx::texture_control_bits::EXPAND_G },
+				{ "EXPAND_B_BIT", rsx::texture_control_bits::EXPAND_B },
+				{ "EXPAND_A_BIT", rsx::texture_control_bits::EXPAND_A },
+				{ "SEXT_R_BIT",   rsx::texture_control_bits::SEXT_R },
+				{ "SEXT_G_BIT",   rsx::texture_control_bits::SEXT_G },
+				{ "SEXT_B_BIT",   rsx::texture_control_bits::SEXT_B },
+				{ "SEXT_A_BIT",   rsx::texture_control_bits::SEXT_A },
+				{ "WRAP_S_BIT",   rsx::texture_control_bits::WRAP_S },
+				{ "WRAP_T_BIT",   rsx::texture_control_bits::WRAP_T },
+				{ "WRAP_R_BIT",   rsx::texture_control_bits::WRAP_R },
 
 				{ "ALPHAKILL    ", rsx::texture_control_bits::ALPHAKILL },
 				{ "RENORMALIZE  ", rsx::texture_control_bits::RENORMALIZE },
@@ -347,7 +360,12 @@ namespace glsl
 				{ "FILTERED_MAG_BIT", rsx::texture_control_bits::FILTERED_MAG },
 				{ "FILTERED_MIN_BIT", rsx::texture_control_bits::FILTERED_MIN },
 				{ "INT_COORDS_BIT  ", rsx::texture_control_bits::UNNORMALIZED_COORDS },
-				{ "CLAMP_COORDS_BIT", rsx::texture_control_bits::CLAMP_TEXCOORDS_BIT }
+				{ "CLAMP_COORDS_BIT", rsx::texture_control_bits::CLAMP_TEXCOORDS_BIT },
+
+				{ "FORMAT_FEATURE_SIGNED_BIT", rsx::texture_control_bits::FF_SIGNED_BIT },
+				{ "FORMAT_FEATURE_GAMMA_BIT",  rsx::texture_control_bits::FF_GAMMA_BIT },
+				{ "FORMAT_FEATURE_BIASED_RENORMALIZATION_BIT", rsx::texture_control_bits::FF_BIASED_RENORM_BIT },
+				{ "FORMAT_FEATURE_16BIT_CHANNELS_BIT", rsx::texture_control_bits::FF_16BIT_CHANNELS_BIT }
 			});
 
 			if (props.require_texture_expand)
@@ -383,6 +401,11 @@ namespace glsl
 			if (props.require_shadowProj_ops)
 			{
 				enabled_options.push_back("_ENABLE_SHADOWPROJ");
+			}
+
+			if (props.require_alpha_kill)
+			{
+				enabled_options.push_back("_ENABLE_TEXTURE_ALPHA_KILL");
 			}
 
 			program_common::define_glsl_switches(OS, enabled_options);

@@ -158,8 +158,6 @@ void sdl_pad_handler::init_config(cfg_pad* cfg)
 	cfg->rstickdeadzone.def    = 8000; // between 0 and SDL_JOYSTICK_AXIS_MAX
 	cfg->ltriggerthreshold.def = 0; // between 0 and SDL_JOYSTICK_AXIS_MAX
 	cfg->rtriggerthreshold.def = 0; // between 0 and SDL_JOYSTICK_AXIS_MAX
-	cfg->lpadsquircling.def    = 8000;
-	cfg->rpadsquircling.def    = 8000;
 
 	// Set default color value
 	cfg->colorR.def = 0;
@@ -740,7 +738,7 @@ pad_capabilities sdl_pad_handler::get_capabilities(const std::string& pad_id)
 	capabilities.has_rumble &= dev->sdl.has_rumble;
 	capabilities.has_accel &= dev->sdl.has_accel;
 	capabilities.has_gyro &= dev->sdl.has_gyro;
-	capabilities.has_pressure_sensitivity &= dev->sdl.is_ds3_with_pressure_buttons;
+	capabilities.has_pressure_intensity_button &= !dev->sdl.is_ds3_with_pressure_buttons; // Only allow if there's not pressure sensitivity
 
 	return capabilities;
 }

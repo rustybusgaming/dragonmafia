@@ -197,22 +197,6 @@ void fmt_class_string<screen_quadrant>::format(std::string& out, u64 arg)
 }
 
 template <>
-void fmt_class_string<tsx_usage>::format(std::string& out, u64 arg)
-{
-	format_enum(out, arg, [](tsx_usage value)
-	{
-		switch (value)
-		{
-		case tsx_usage::disabled: return "Disabled";
-		case tsx_usage::enabled: return "Enabled";
-		case tsx_usage::forced: return "Forced";
-		}
-
-		return unknown;
-	});
-}
-
-template <>
 void fmt_class_string<rsx_fifo_mode>::format(std::string& out, u64 arg)
 {
 	format_enum(out, arg, [](rsx_fifo_mode value)
@@ -374,6 +358,9 @@ void fmt_class_string<camera_handler>::format(std::string& out, u64 arg)
 		case camera_handler::null: return "Null";
 		case camera_handler::fake: return "Fake";
 		case camera_handler::qt: return "Qt";
+#ifdef HAVE_SDL3
+		case camera_handler::sdl: return "SDL";
+#endif
 		}
 
 		return unknown;

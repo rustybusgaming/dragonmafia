@@ -759,6 +759,10 @@ namespace vk
 	{
 		switch (block_size)
 		{
+		case 1:
+			return vk::get_compute_task<cs_deswizzle_3d<u8, u8, false>>();
+		case 2:
+			return vk::get_compute_task<cs_deswizzle_3d<u16, WordType, SwapBytes>>();
 		case 4:
 			return vk::get_compute_task<cs_deswizzle_3d<u32, WordType, SwapBytes>>();
 		case 8:
@@ -776,21 +780,27 @@ namespace vk
 		vk::cs_deswizzle_base* job = nullptr;
 		const auto block_size = (word_size * word_count);
 
-		ensure(word_size == 4 || word_size == 2);
-
 		if (!swap_bytes)
 		{
-			if (word_size == 4)
+			switch (word_size)
 			{
-				job = get_deswizzle_transformation<u32, false>(block_size);
-			}
-			else
-			{
+			case 1:
+				job = get_deswizzle_transformation<u8, false>(block_size);
+				break;
+			case 2:
 				job = get_deswizzle_transformation<u16, false>(block_size);
+				break;
+			case 4:
+				job = get_deswizzle_transformation<u32, false>(block_size);
+				break;
+			default:
+				fmt::throw_exception("Unimplemented deswizzle for format.");
 			}
 		}
 		else
 		{
+			ensure(word_size == 2 || word_size == 4);
+
 			if (word_size == 4)
 			{
 				job = get_deswizzle_transformation<u32, true>(block_size);
@@ -867,7 +877,7 @@ namespace vk
 	static const vk::command_buffer& prepare_for_transfer(const vk::command_buffer& primary_cb, vk::image* dst_image, rsx::flags32_t& flags)
 	{
 		AsyncTaskScheduler* async_scheduler = (flags & image_upload_options::upload_contents_async)
-			? std::addressof(g_fxo->get<AsyncTaskScheduler>())
+			? g_fxo->try_get<AsyncTaskScheduler>()
 			: nullptr;
 
 		if (async_scheduler && (dst_image->aspect() & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)))
@@ -1173,6 +1183,13 @@ namespace vk
 		{
 			ensure(scratch_buf);
 
+			// WAW hazard - complete previous work before executing any transfers
+			insert_buffer_memory_barrier(
+				cmd2, scratch_buf->value, 0, scratch_offset,
+				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+				VK_ACCESS_TRANSFER_WRITE_BIT);
+
 			if (upload_commands.size() > 1)
 			{
 				auto range_ptr = buffer_copies.data();
@@ -1187,8 +1204,11 @@ namespace vk
 				vkCmdCopyBuffer(cmd2, upload_buffer->value, scratch_buf->value, static_cast<u32>(buffer_copies.size()), buffer_copies.data());
 			}
 
-			insert_buffer_memory_barrier(cmd2, scratch_buf->value, 0, scratch_offset, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+			insert_buffer_memory_barrier(
+				cmd2, scratch_buf->value, 0, scratch_offset,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				VK_ACCESS_TRANSFER_WRITE_BIT,
+				VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 		}
 
 		// Swap and deswizzle if requested

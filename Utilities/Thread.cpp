@@ -8,7 +8,6 @@
 #include "Emu/RSX/RSXThread.h"
 #include "Thread.h"
 #include "Utilities/JIT.h"
-#include <thread>
 #include <cfenv>
 
 #ifdef ARCH_ARM64
@@ -105,6 +104,11 @@ thread_local u64 g_tls_wait_time = 0;
 thread_local u64 g_tls_wait_fail = 0;
 thread_local bool g_tls_access_violation_recovered = false;
 extern thread_local std::string(*g_tls_log_prefix)();
+
+namespace stx
+{
+	atomic_t<u32> g_launch_retainer{0};
+}
 
 // Report error and call std::abort(), defined in main.cpp
 [[noreturn]] void report_fatal_error(std::string_view text, bool is_html = false, bool include_help_text = true);
@@ -2160,10 +2164,17 @@ void thread_base::start()
 	ensure(m_thread);
 	ensure(::ResumeThread(reinterpret_cast<HANDLE>(+m_thread)) != static_cast<DWORD>(-1));
 #elif defined(__APPLE__)
-	pthread_attr_t stack_size_attr;
-	pthread_attr_init(&stack_size_attr);
-	pthread_attr_setstacksize(&stack_size_attr, 0x800000);
-	ensure(pthread_create(reinterpret_cast<pthread_t*>(&m_thread.raw()), &stack_size_attr, entry_point, this) == 0);
+	pthread_attr_t attrs;
+	struct sched_param sp;
+    memset(&sp, 0, sizeof(struct sched_param));
+    sp.sched_priority=99;
+	pthread_attr_init(&attrs);
+	pthread_attr_setstacksize(&attrs, 0x800000);
+	
+	pthread_attr_set_qos_class_np(&attrs, QOS_CLASS_USER_INTERACTIVE, 0);
+	pthread_attr_setschedpolicy(&attrs, SCHED_RR);
+	pthread_attr_setschedparam(&attrs, &sp);
+	ensure(pthread_create(reinterpret_cast<pthread_t*>(&m_thread.raw()), &attrs, entry_point, this) == 0);
 #else
 	ensure(pthread_create(reinterpret_cast<pthread_t*>(&m_thread.raw()), nullptr, entry_point, this) == 0);
 #endif

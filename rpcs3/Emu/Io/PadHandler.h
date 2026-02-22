@@ -90,7 +90,7 @@ struct pad_capabilities
 	bool has_rumble = false;
 	bool has_accel = false;
 	bool has_gyro = false;
-	bool has_pressure_sensitivity = false;
+	bool has_pressure_intensity_button = true;
 };
 
 using pad_preview_values = std::array<int, 6>;
@@ -205,7 +205,7 @@ protected:
 		std::set<T> key_codes;
 
 		const std::string& def = cfg_string.def;
-		const std::vector<std::string> names = cfg_pad::get_buttons(cfg_string);
+		const std::vector<std::string> names = cfg_pad::get_buttons(cfg_string.to_string());
 		T def_code = umax;
 
 		for (const std::string& nam : names)

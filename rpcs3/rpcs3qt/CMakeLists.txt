@@ -8,6 +8,7 @@ add_library(rpcs3_ui STATIC
     camera_settings_dialog.cpp
     cg_disasm_window.cpp
     cheat_manager.cpp
+    clans_settings_dialog.cpp
     config_adapter.cpp
     config_checker.cpp
     curl_handle.cpp
@@ -30,7 +31,9 @@ add_library(rpcs3_ui STATIC
     flow_widget_item.cpp
     game_compatibility.cpp
     game_list.cpp
+    game_list_actions.cpp
     game_list_base.cpp
+    game_list_context_menu.cpp
     game_list_delegate.cpp
     game_list_frame.cpp
     game_list_grid.cpp
@@ -45,6 +48,7 @@ add_library(rpcs3_ui STATIC
     input_dialog.cpp
     instruction_editor_dialog.cpp
     ipc_settings_dialog.cpp
+    kamen_rider_dialog.cpp
     kernel_explorer.cpp
     localized.cpp
     localized_emu.cpp
@@ -98,6 +102,7 @@ add_library(rpcs3_ui STATIC
     shortcut_handler.cpp
     shortcut_settings.cpp
     skylander_dialog.cpp
+    sound_effect_manager_dialog.cpp
     syntax_highlighter.cpp
     system_cmd_dialog.cpp
     table_item_delegate.cpp
@@ -143,6 +148,7 @@ add_library(rpcs3_ui STATIC
 
     ../Input/basic_keyboard_handler.cpp
     ../Input/basic_mouse_handler.cpp
+    ../Input/camera_video_sink.cpp
     ../Input/ds3_pad_handler.cpp
     ../Input/ds4_pad_handler.cpp
     ../Input/dualsense_pad_handler.cpp
@@ -151,6 +157,7 @@ add_library(rpcs3_ui STATIC
     ../Input/hid_pad_handler.cpp
     ../Input/keyboard_pad_handler.cpp
     ../Input/mm_joystick_handler.cpp
+    ../Input/mouse_gyro_handler.cpp
     ../Input/pad_thread.cpp
     ../Input/product_info.cpp
     ../Input/ps_move_calibration.cpp
@@ -159,8 +166,10 @@ add_library(rpcs3_ui STATIC
     ../Input/ps_move_tracker.cpp
     ../Input/raw_mouse_config.cpp
     ../Input/raw_mouse_handler.cpp
-    ../Input/sdl_pad_handler.cpp
+    ../Input/sdl_camera_handler.cpp
+    ../Input/sdl_camera_video_sink.cpp
     ../Input/sdl_instance.cpp
+    ../Input/sdl_pad_handler.cpp
     ../Input/skateboard_pad_handler.cpp
     ../Input/xinput_pad_handler.cpp
 
@@ -172,7 +181,10 @@ if(HAS_MEMORY_BREAKPOINTS)
 endif()
 
 if(WIN32)
-    target_sources(rpcs3_ui PUBLIC "../windows.qrc")
+    target_sources(rpcs3_ui PRIVATE "../windows.qrc")
+    set_source_files_properties("../windows.qrc" PROPERTIES 
+        RCC_OPTIONS "--include;${CMAKE_CURRENT_SOURCE_DIR}/../qt/etc/qt.conf"
+    )
     target_compile_definitions(rpcs3_ui PRIVATE UNICODE _UNICODE)
 endif()
 

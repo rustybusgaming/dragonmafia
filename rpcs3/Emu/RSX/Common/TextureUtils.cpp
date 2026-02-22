@@ -1096,80 +1096,65 @@ namespace rsx
 			fmt::throw_exception("Wrong format 0x%x", format);
 		}
 
-		if (word_size)
+		if (!word_size)
 		{
-			if (word_size == 1)
+			return result;
+		}
+
+		result.element_size = word_size;
+		result.block_length = words_per_block;
+
+		bool require_cpu_swizzle = !caps.supports_hw_deswizzle && is_swizzled;
+		bool require_cpu_byteswap = word_size > 1 && !caps.supports_byteswap;
+
+		if (is_swizzled && caps.supports_hw_deswizzle)
+		{
+			result.require_deswizzle = true;
+		}
+
+		if (!require_cpu_byteswap && !require_cpu_swizzle)
+		{
+			result.require_swap = (word_size > 1);
+
+			if (caps.supports_zero_copy)
 			{
-				if (is_swizzled)
-				{
-					copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u8>(), src_layout.data.as_span<const u8>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
-				}
-				else if (caps.supports_zero_copy)
-				{
-					result.require_upload = true;
-					result.deferred_cmds = build_transfer_cmds(src_layout.data.data(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-				}
-				else
-				{
-					copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u8>(), src_layout.data.as_span<const u8>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-				}
+				result.require_upload = true;
+				result.deferred_cmds = build_transfer_cmds(src_layout.data.data(), word_size * words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
 			}
+			else if (word_size == 1)
+			{
+				copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u8>(), src_layout.data.as_span<const u8>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
+			}
+			else if (word_size == 2)
+			{
+				copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const u16>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
+			}
+			else if (word_size == 4)
+			{
+				copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const u32>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
+			}
+
+			return result;
+		}
+
+		if (word_size == 1)
+		{
+			ensure(is_swizzled);
+			copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u8>(), src_layout.data.as_span<const u8>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
+		}
+		else if (word_size == 2)
+		{
+			if (is_swizzled)
+				copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const be_t<u16>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
 			else
-			{
-				result.element_size = word_size;
-				result.block_length = words_per_block;
-
-				bool require_cpu_swizzle = !caps.supports_hw_deswizzle && is_swizzled;
-				bool require_cpu_byteswap = !caps.supports_byteswap;
-
-				if (is_swizzled && caps.supports_hw_deswizzle)
-				{
-					if (word_size == 4 || (((word_size * words_per_block) & 3) == 0))
-					{
-						result.require_deswizzle = true;
-					}
-					else
-					{
-						require_cpu_swizzle = true;
-					}
-				}
-
-				if (!require_cpu_byteswap && !require_cpu_swizzle)
-				{
-					result.require_swap = true;
-
-					if (caps.supports_zero_copy)
-					{
-						result.require_upload = true;
-						result.deferred_cmds = build_transfer_cmds(src_layout.data.data(), word_size * words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-					}
-					else if (word_size == 2)
-					{
-						copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const u16>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-					}
-					else if (word_size == 4)
-					{
-						copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const u32>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-					}
-				}
-				else
-				{
-					if (word_size == 2)
-					{
-						if (is_swizzled)
-							copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const be_t<u16>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
-						else
-							copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const be_t<u16>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-					}
-					else if (word_size == 4)
-					{
-						if (is_swizzled)
-							copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const be_t<u32>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
-						else
-							copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const be_t<u32>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
-					}
-				}
-			}
+				copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u16>(), src_layout.data.as_span<const be_t<u16>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
+		}
+		else if (word_size == 4)
+		{
+			if (is_swizzled)
+				copy_unmodified_block_swizzled::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const be_t<u32>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block);
+			else
+				copy_unmodified_block::copy_mipmap_level(dst_buffer.as_span<u32>(), src_layout.data.as_span<const be_t<u32>>(), words_per_block, w, h, depth, src_layout.border, dst_pitch_in_block, src_layout.pitch_in_block);
 		}
 
 		return result;
@@ -1215,27 +1200,59 @@ namespace rsx
 		fmt::throw_exception("Unknown format 0x%x", texture_format);
 	}
 
-	bool is_int8_remapped_format(u32 format)
+	rsx::flags32_t get_format_features(u32 texture_format)
 	{
-		switch (format)
+		switch (texture_format)
 		{
+		case CELL_GCM_TEXTURE_B8:
+		case CELL_GCM_TEXTURE_A1R5G5B5:
+		case CELL_GCM_TEXTURE_A4R4G4B4:
+		case CELL_GCM_TEXTURE_R5G6B5:
+		case CELL_GCM_TEXTURE_A8R8G8B8:
+		case CELL_GCM_TEXTURE_COMPRESSED_DXT1:
+		case CELL_GCM_TEXTURE_COMPRESSED_DXT23:
+		case CELL_GCM_TEXTURE_COMPRESSED_DXT45:
+		case CELL_GCM_TEXTURE_G8B8:
+		case CELL_GCM_TEXTURE_COMPRESSED_B8R8_G8R8:
+		case CELL_GCM_TEXTURE_COMPRESSED_R8B8_R8G8:
+		case CELL_GCM_TEXTURE_R6G5B5:
+		case CELL_GCM_TEXTURE_R5G5B5A1:
+		case CELL_GCM_TEXTURE_D1R5G5B5:
+		case CELL_GCM_TEXTURE_D8R8G8B8:
+			// Base texture formats - everything is supported
+			return RSX_FORMAT_FEATURE_SIGNED_COMPONENTS | RSX_FORMAT_FEATURE_GAMMA_CORRECTION | RSX_FORMAT_FEATURE_BIASED_NORMALIZATION;
+
 		case CELL_GCM_TEXTURE_DEPTH24_D8:
 		case CELL_GCM_TEXTURE_DEPTH24_D8_FLOAT:
 		case CELL_GCM_TEXTURE_DEPTH16:
 		case CELL_GCM_TEXTURE_DEPTH16_FLOAT:
+			// Depth textures will hang the hardware if BX2 or GAMMA is active. ARGB8_SIGNED has no impact.
+			// UNSIGNED_REMAP=BIASED works on all formats including the float variants.
+			return RSX_FORMAT_FEATURE_BIASED_NORMALIZATION;
+
 		case CELL_GCM_TEXTURE_X16:
+			// X16 - GAMMA causes hangs. ARGB8_SIGNED is ignored. UNSIGNED_REMAP=BIASED works.
+			return RSX_FORMAT_FEATURE_BIASED_NORMALIZATION | RSX_FORMAT_FEATURE_16BIT_CHANNELS;
 		case CELL_GCM_TEXTURE_Y16_X16:
+			// X16 | Y16 - GAMMA causes hangs. ARGB8_SIGNED works. UNSIGNED_REMAP=BIASED also works.
+			return RSX_FORMAT_FEATURE_SIGNED_COMPONENTS | RSX_FORMAT_FEATURE_BIASED_NORMALIZATION | RSX_FORMAT_FEATURE_16BIT_CHANNELS;
+
 		case CELL_GCM_TEXTURE_COMPRESSED_HILO8:
+			// GAMMA causes GPU hangs. ARGB8_SIGNED is ignored. UNSIGNED_REMAP=BIASED works.
+			return RSX_FORMAT_FEATURE_BIASED_NORMALIZATION;
+
 		case CELL_GCM_TEXTURE_COMPRESSED_HILO_S8:
+			// GAMMA causes hangs. Other flags ignored.
+			return 0;
+
 		case CELL_GCM_TEXTURE_W16_Z16_Y16_X16_FLOAT:
 		case CELL_GCM_TEXTURE_W32_Z32_Y32_X32_FLOAT:
 		case CELL_GCM_TEXTURE_X32_FLOAT:
 		case CELL_GCM_TEXTURE_Y16_X16_FLOAT:
-			// NOTE: Special data formats (XY, HILO, DEPTH) are not RGB formats
-			return false;
-		default:
-			return true;
+			// Floating point textures. Nothing works.
+			return 0;
 		}
+		fmt::throw_exception("Unknown format 0x%x", texture_format);
 	}
 
 	/**

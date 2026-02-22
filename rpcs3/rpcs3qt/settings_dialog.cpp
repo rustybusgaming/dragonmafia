@@ -288,69 +288,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	SubscribeTooltip(ui->gb_spu_threads, tooltips.settings.preferred_spu_threads);
 	ui->preferredSPUThreads->setItemText(ui->preferredSPUThreads->findData(0), tr("Auto", "Preferred SPU threads"));
 
-	if (utils::has_rtm())
-	{
-		m_emu_settings->EnhanceComboBox(ui->enableTSX, emu_settings_type::EnableTSX);
-		SubscribeTooltip(ui->gb_tsx, tooltips.settings.enable_tsx);
-
-		if (!utils::has_mpx() || utils::has_tsx_force_abort())
-		{
-			remove_item(ui->enableTSX, static_cast<int>(tsx_usage::enabled), static_cast<int>(g_cfg.core.enable_TSX.def));
-		}
-
-		connect(ui->enableTSX, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index)
-		{
-			if (index < 0) return;
-			if (const auto [text, value] = get_data(ui->enableTSX, index); value == static_cast<int>(tsx_usage::forced) &&
-				(!utils::has_mpx() || utils::has_tsx_force_abort()))
-			{
-				QString title;
-				QString message;
-				if (!utils::has_mpx())
-				{
-					title = tr("Haswell/Broadwell TSX Warning");
-					message = gui::utils::make_paragraph(tr(
-						"RPCS3 has detected that you are using TSX functions on a Haswell or Broadwell CPU.\n"
-						"Intel has deactivated these functions in newer Microcode revisions, since they can lead to unpredicted behaviour.\n"
-						"That means using TSX may break games or even <font color=\"red\"><b>damage</b></font> your data.\n"
-						"We recommend to disable this feature and update your computer BIOS.\n"
-						"\n"
-						"Do you wish to use TSX anyway?"
-					));
-				}
-				else
-				{
-					title = tr("TSX-FA Warning");
-					message = gui::utils::make_paragraph(tr(
-						"RPCS3 has detected your CPU only supports TSX-FA.\n"
-						"That means using TSX may break games or even <font color=\"red\"><b>damage</b></font> your data.\n"
-						"We recommend to disable this feature.\n"
-						"\n"
-						"Do you wish to use TSX anyway?"
-					));
-				}
-
-				if (QMessageBox::No == QMessageBox::critical(this, title, message, QMessageBox::Yes, QMessageBox::No))
-				{
-					// Reset if the messagebox was answered with no. This prevents the currentIndexChanged signal in EnhanceComboBox
-					ui->enableTSX->setCurrentIndex(find_item(ui->enableTSX, static_cast<int>(g_cfg.core.enable_TSX.def)));
-				}
-			}
-		});
-	}
-	else
-	{
-		ui->enableTSX->setEnabled(false);
-		ui->enableTSX->setPlaceholderText(tr("Not supported", "Enable TSX"));
-		SubscribeTooltip(ui->enableTSX, tr("Unfortunately, your CPU model does not support this instruction set.", "Enable TSX"));
-
-		m_emu_settings->SetSetting(emu_settings_type::EnableTSX, fmt::format("%s", tsx_usage::disabled));
-		connect(this, &settings_dialog::signal_restore_dependant_defaults, [this]()
-		{
-			m_emu_settings->SetSetting(emu_settings_type::EnableTSX, fmt::format("%s", tsx_usage::disabled));
-		});
-	}
-
 	// PPU tool tips
 	SubscribeTooltip(ui->ppu__static, tooltips.settings.ppu__static);
 	SubscribeTooltip(ui->ppu_llvm,    tooltips.settings.ppu_llvm);
@@ -616,7 +553,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	reset_zcull_options();
 	connect(this, &settings_dialog::signal_restore_dependant_defaults, this, reset_zcull_options);
 
-	connect(ui->zcullPrecisionMode, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index)
+	connect(ui->zcullPrecisionMode, &QComboBox::currentIndexChanged, [this](int index)
 	{
 		if (index < 0) return;
 
@@ -652,7 +589,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 			ui->stereoRenderMode->setEnabled(stereo_allowed && stereo_enabled);
 			ui->stereoRenderEnabled->setEnabled(stereo_allowed);
 		};
-		connect(ui->resBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [enable_3D_modes](int){ enable_3D_modes(); });
+		connect(ui->resBox, &QComboBox::currentIndexChanged, this, [enable_3D_modes](int){ enable_3D_modes(); });
 		connect(ui->stereoRenderEnabled, &QCheckBox::checkStateChanged, this, [enable_3D_modes](Qt::CheckState){ enable_3D_modes(); });
 		enable_3D_modes();
 	}
@@ -935,7 +872,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	apply_fsr_specific_options();
 	connect(ui->renderBox, &QComboBox::currentTextChanged, apply_renderer_specific_options);
 	connect(ui->renderBox, &QComboBox::currentTextChanged, this, apply_fsr_specific_options);
-	connect(ui->outputScalingMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, apply_fsr_specific_options);
+	connect(ui->outputScalingMode, &QComboBox::currentIndexChanged, this, apply_fsr_specific_options);
 
 	//                      _ _         _______    _
 	//       /\            | (_)       |__   __|  | |
@@ -1060,7 +997,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 #else
 	SubscribeTooltip(ui->gb_audio_out, tooltips.settings.audio_out_linux);
 #endif
-	connect(ui->audioOutBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [change_audio_output_device, get_audio_output_devices](int)
+	connect(ui->audioOutBox, &QComboBox::currentIndexChanged, this, [change_audio_output_device, get_audio_output_devices](int)
 	{
 		get_audio_output_devices(false);
 		change_audio_output_device(0); // Set device to 'Default'
@@ -1069,7 +1006,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	m_emu_settings->EnhanceComboBox(ui->combo_audio_channel_layout, emu_settings_type::AudioChannelLayout);
 	SubscribeTooltip(ui->gb_audio_channel_layout, tooltips.settings.audio_channel_layout);
 
-	connect(ui->combo_audio_format, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index)
+	connect(ui->combo_audio_format, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
 		const auto [text, value] = get_data(ui->combo_audio_format, index);
 		ui->list_audio_formats->setEnabled(static_cast<audio_format>(value) == audio_format::manual);
@@ -1134,7 +1071,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	SubscribeTooltip(ui->gb_audio_avport, tooltips.settings.audio_avport);
 
 	SubscribeTooltip(ui->gb_audio_device, tooltips.settings.audio_device);
-	connect(ui->audioDeviceBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, change_audio_output_device);
+	connect(ui->audioDeviceBox, &QComboBox::currentIndexChanged, this, change_audio_output_device);
 	connect(this, &settings_dialog::signal_restore_dependant_defaults, this, [change_audio_output_device]() { change_audio_output_device(0); }); // Set device to 'Default'
 	get_audio_output_devices();
 
@@ -1174,7 +1111,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceComboBox(ui->microphoneBox, emu_settings_type::MicrophoneType);
 	SubscribeTooltip(ui->microphoneBox, tooltips.settings.microphone);
-	connect(ui->microphoneBox, QOverload<int>::of(&QComboBox::currentIndexChanged), change_microphone_type);
+	connect(ui->microphoneBox, &QComboBox::currentIndexChanged, change_microphone_type);
 	propagate_used_devices(); // Enables/Disables comboboxes and checks values from config for sanity
 
 	// Checkboxes
@@ -1247,7 +1184,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 			cfg_log.error("The selected camera was not found. Selecting default camera as fallback.");
 			ui->cameraIdBox->setCurrentIndex(ui->cameraIdBox->findData(QString::fromStdString(default_camera)));
 		}
-		connect(ui->cameraIdBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index)
+		connect(ui->cameraIdBox, &QComboBox::currentIndexChanged, this, [this](int index)
 		{
 			if (index >= 0) m_emu_settings->SetSetting(emu_settings_type::CameraID, ui->cameraIdBox->itemData(index).toString().toStdString());
 		});
@@ -1487,7 +1424,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	// Comboboxes
 
-	connect(ui->netStatusBox, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index)
+	connect(ui->netStatusBox, &QComboBox::currentIndexChanged, [this](int index)
 	{
 		if (index < 0) return;
 		const auto [text, value] = get_data(ui->netStatusBox, index);
@@ -1498,10 +1435,12 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		{
 			ui->psnStatusBox->setCurrentIndex(find_item(ui->psnStatusBox, static_cast<int>(g_cfg.net.psn_status.def)));
 			ui->psnStatusBox->setEnabled(false);
+			ui->enable_clans->setEnabled(false);
 		}
 		else
 		{
 			ui->psnStatusBox->setEnabled(true);
+			ui->enable_clans->setEnabled(true);
 		}
 	});
 	m_emu_settings->EnhanceComboBox(ui->netStatusBox, emu_settings_type::InternetStatus);
@@ -1510,8 +1449,11 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	m_emu_settings->EnhanceComboBox(ui->psnStatusBox, emu_settings_type::PSNStatus);
 	SubscribeTooltip(ui->gb_psnStatusBox, tooltips.settings.psn_status);
 
+	m_emu_settings->EnhanceCheckBox(ui->enable_clans, emu_settings_type::EnableClans);
+	SubscribeTooltip(ui->enable_clans, tooltips.settings.enable_clans);
+
 	settings_dialog::refresh_countrybox();
-	connect(ui->psnCountryBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index)
+	connect(ui->psnCountryBox, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
 		if (index < 0)
 			return;
@@ -1873,14 +1815,15 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	SubscribeTooltip(ui->useNativeInterface, tooltips.settings.use_native_interface);
 
 #if defined(__linux__)
-	ui->enableGamemode->setVisible(true);
-#endif
 #if defined(GAMEMODE_AVAILABLE)
-	ui->enableGamemode->setEnabled(true);
 	m_emu_settings->EnhanceCheckBox(ui->enableGamemode, emu_settings_type::EnableGamemode);
 	SubscribeTooltip(ui->enableGamemode, tooltips.settings.enable_gamemode);
 #else
+	ui->enableGamemode->setEnabled(false);
 	SubscribeTooltip(ui->enableGamemode, tooltips.settings.no_gamemode);
+#endif
+#else
+	ui->enableGamemode->setVisible(false);
 #endif
 
 	m_emu_settings->EnhanceCheckBox(ui->showShaderCompilationHint, emu_settings_type::ShowShaderCompilationHint);
@@ -1903,6 +1846,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceCheckBox(ui->showCaptureHints, emu_settings_type::ShowCaptureHints);
 	SubscribeTooltip(ui->showCaptureHints, tooltips.settings.show_capture_hints);
+
+	m_emu_settings->EnhanceCheckBox(ui->recordWithOverlays, emu_settings_type::RecordWithOverlays);
+	SubscribeTooltip(ui->recordWithOverlays, tooltips.settings.record_with_overlays);
 
 	m_emu_settings->EnhanceCheckBox(ui->pauseDuringHomeMenu, emu_settings_type::PauseDuringHomeMenu);
 	SubscribeTooltip(ui->pauseDuringHomeMenu, tooltips.settings.pause_during_home_menu);
@@ -2336,7 +2282,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		ui->combo_updates->addItem(tr("Automatic", "Updates"), gui::update_auto);
 		ui->combo_updates->addItem(tr("No", "Updates"), gui::update_off);
 		ui->combo_updates->setCurrentIndex(ui->combo_updates->findData(m_gui_settings->GetValue(gui::m_check_upd_start).toString()));
-		connect(ui->combo_updates, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index)
+		connect(ui->combo_updates, &QComboBox::currentIndexChanged, [this](int index)
 		{
 			if (index >= 0) m_gui_settings->SetValue(gui::m_check_upd_start, ui->combo_updates->itemData(index));
 		});
@@ -2483,6 +2429,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceCheckBox(ui->forceHwMSAAResolve, emu_settings_type::ForceHwMSAAResolve);
 	SubscribeTooltip(ui->forceHwMSAAResolve, tooltips.settings.force_hw_MSAA);
+
+	m_emu_settings->EnhanceCheckBox(ui->useReBAR, emu_settings_type::UseReBAR);
+	SubscribeTooltip(ui->useReBAR, tooltips.settings.use_ReBAR);
 
 	m_emu_settings->EnhanceCheckBox(ui->disableOnDiskShaderCache, emu_settings_type::DisableOnDiskShaderCache);
 	SubscribeTooltip(ui->disableOnDiskShaderCache, tooltips.settings.disable_on_disk_shader_cache);

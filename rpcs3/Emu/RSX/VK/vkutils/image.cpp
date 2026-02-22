@@ -3,6 +3,7 @@
 #include "device.h"
 #include "image.h"
 #include "image_helpers.h"
+#include "sampler.h"
 
 #include "../VKResourceManager.h"
 #include <memory>
@@ -127,7 +128,16 @@ namespace vk
 			fmt::throw_exception("No compatible memory type was found!");
 		}
 
-		memory = std::make_shared<vk::memory_block>(m_device, memory_req.size, memory_req.alignment, allocation_type_info, allocation_pool, nullable);
+		memory_allocation_request alloc_request
+		{
+			.size = memory_req.size,
+			.alignment = memory_req.alignment,
+			.memory_type = &allocation_type_info,
+			.pool = allocation_pool,
+			.throw_on_fail = !nullable
+		};
+		memory = std::make_shared<vk::memory_block>(m_device, alloc_request);
+
 		if (auto device_mem = memory->get_vk_device_memory();
 			device_mem != VK_NULL_HANDLE) [[likely]]
 		{
@@ -195,6 +205,11 @@ namespace vk
 	rsx::format_class image::format_class() const
 	{
 		return m_format_class;
+	}
+
+	std::string image::debug_name() const
+	{
+		return m_debug_name;
 	}
 
 	void image::push_layout(const command_buffer& cmd, VkImageLayout layout)
@@ -294,6 +309,8 @@ namespace vk
 
 			_vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 		}
+
+		m_debug_name = name;
 	}
 
 	image_view::image_view(VkDevice dev, VkImage image, VkImageViewType view_type, VkFormat format, VkComponentMapping mapping, VkImageSubresourceRange range)
@@ -395,6 +412,14 @@ namespace vk
 		// Restore requested mapping
 		info.components = mapping;
 #endif
+
+		if (m_resource)
+		{
+			if (const auto name = m_resource->debug_name(); !name.empty())
+			{
+				set_debug_name(fmt::format("%p (%p) %s", value, m_resource->value, name));
+			}
+		}
 	}
 
 	viewable_image* viewable_image::clone()
@@ -476,6 +501,20 @@ namespace vk
 				gc->dispose(p.second);
 			}
 			views.clear();
+		}
+	}
+
+	void image_view::set_debug_name(std::string_view name)
+	{
+		if (g_render_device->get_debug_utils_support())
+		{
+			VkDebugUtilsObjectNameInfoEXT name_info{};
+			name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+			name_info.objectType = VK_OBJECT_TYPE_IMAGE_VIEW;
+			name_info.objectHandle = reinterpret_cast<u64>(value);
+			name_info.pObjectName = name.data();
+
+			_vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 		}
 	}
 }

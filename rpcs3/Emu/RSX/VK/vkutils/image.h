@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "device.h"
 #include "memory.h"
+#include "unique_resource.h"
 
 #include <stack>
 
@@ -26,12 +27,13 @@ namespace vk
 		VK_IMAGE_CREATE_SPECIAL_FLAGS_RPCS3 = (VK_IMAGE_CREATE_ALLOW_NULL_RPCS3 | VK_IMAGE_CREATE_SHAREABLE_RPCS3)
 	};
 
-	class image
+	class image : public unique_resource
 	{
 		std::stack<VkImageLayout> m_layout_stack;
 		VkImageAspectFlags m_storage_aspect = 0;
 
 		rsx::format_class m_format_class = RSX_FORMAT_CLASS_UNDEFINED;
+		std::string m_debug_name;
 
 		void validate(const vk::render_device& dev, const VkImageCreateInfo& info) const;
 
@@ -67,6 +69,9 @@ namespace vk
 		image(const image&) = delete;
 		image(image&&) = delete;
 
+		// Identifiers
+		VkImage handle() const { return value; }
+
 		// Properties
 		u32 width() const;
 		u32 height() const;
@@ -79,6 +84,7 @@ namespace vk
 		VkSharingMode sharing_mode() const;
 		VkImageAspectFlags aspect() const;
 		rsx::format_class format_class() const;
+		std::string debug_name() const;
 
 		// Pipeline management
 		void push_layout(const command_buffer& cmd, VkImageLayout layout);
@@ -94,7 +100,7 @@ namespace vk
 		void set_debug_name(const std::string& name);
 
 	protected:
-		VkDevice m_device;
+		VkDevice m_device = VK_NULL_HANDLE;
 	};
 
 	struct image_view
@@ -123,6 +129,7 @@ namespace vk
 		vk::image* m_resource = nullptr;
 
 		void create_impl();
+		void set_debug_name(std::string_view name);
 	};
 
 	class viewable_image : public image

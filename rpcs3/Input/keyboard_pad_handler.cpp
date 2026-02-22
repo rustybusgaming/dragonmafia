@@ -68,8 +68,6 @@ void keyboard_pad_handler::init_config(cfg_pad* cfg)
 	cfg->rstickdeadzone.def       = 0;
 	cfg->ltriggerthreshold.def    = 0;
 	cfg->rtriggerthreshold.def    = 0;
-	cfg->lpadsquircling.def       = 8000;
-	cfg->rpadsquircling.def       = 8000;
 
 	// apply defaults
 	cfg->from_default();
@@ -837,7 +835,7 @@ std::string keyboard_pad_handler::GetKeyName(const u32& keyCode)
 std::set<u32> keyboard_pad_handler::GetKeyCodes(const cfg::string& cfg_string)
 {
 	std::set<u32> key_codes;
-	for (const std::string& key_name : cfg_pad::get_buttons(cfg_string))
+	for (const std::string& key_name : cfg_pad::get_buttons(cfg_string.to_string()))
 	{
 		if (u32 code = GetKeyCode(QString::fromStdString(key_name)); code != Qt::NoButton)
 		{

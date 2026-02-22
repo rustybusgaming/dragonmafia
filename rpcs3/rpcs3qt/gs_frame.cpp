@@ -19,6 +19,7 @@
 #include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/Io/interception.h"
 #include "Emu/Io/recording_config.h"
+#include "Input/pad_thread.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -339,6 +340,14 @@ void gs_frame::handle_shortcut(gui::shortcuts::shortcut shortcut_key, const QKey
 		default: break; // unreachable
 		}
 
+		if (shortcut_key == gui::shortcuts::shortcut::gw_restart && !boot_current_game_savestate(true, index))
+		{
+			// Normal restart if there is no savestate
+			Emu.Restart();
+			break;
+		}
+
+		// Reboot with savestate
 		boot_current_game_savestate(false, index);
 		break;
 	}
@@ -394,6 +403,15 @@ void gs_frame::handle_shortcut(gui::shortcuts::shortcut shortcut_key, const QKey
 		audio::change_volume(-5);
 		break;
 	}
+	case gui::shortcuts::shortcut::gw_toggle_mouse_gyro:
+	{
+		if (auto* pad_thr = pad::get_pad_thread(true))
+		{
+			const bool mouse_gyro_enabled = pad_thr->get_mouse_gyro().toggle_enabled();
+			gui_log.notice("Mouse-based gyro emulation %s", mouse_gyro_enabled ? "enabled" : "disabled");
+		}
+		break;
+	}
 	default:
 	{
 		break;
@@ -447,7 +465,7 @@ void gs_frame::toggle_recording()
 		// Play a sound
 		if (const std::string sound_path = fs::get_config_dir() + "sounds/snd_recording.wav"; fs::is_file(sound_path))
 		{
-			Emu.GetCallbacks().play_sound(sound_path);
+			Emu.GetCallbacks().play_sound(sound_path, std::nullopt);
 		}
 		else
 		{
@@ -830,10 +848,10 @@ bool gs_frame::can_consume_frame() const
 	return video_provider.can_consume_frame();
 }
 
-void gs_frame::present_frame(std::vector<u8>& data, u32 pitch, u32 width, u32 height, bool is_bgra) const
+void gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra) const
 {
 	utils::video_provider& video_provider = g_fxo->get<utils::video_provider>();
-	video_provider.present_frame(data, pitch, width, height, is_bgra);
+	video_provider.present_frame(std::move(data), pitch, width, height, is_bgra);
 }
 
 void gs_frame::take_screenshot(std::vector<u8>&& data, u32 sshot_width, u32 sshot_height, bool is_bgra)
@@ -1040,7 +1058,7 @@ void gs_frame::take_screenshot(std::vector<u8>&& data, u32 sshot_width, u32 ssho
 					}
 				}
 
-				const std::string cell_sshot_filename = manager.get_screenshot_path(date_time.toString("yyyy/MM/dd").toStdString());
+				const std::string cell_sshot_filename = Emu.GetCallbacks().get_photo_path(manager.get_photo_title() + ".png");
 				const std::string cell_sshot_dir      = fs::get_parent_dir(cell_sshot_filename);
 
 				screenshot_log.notice("Saving cell screenshot to %s", cell_sshot_filename);
@@ -1070,7 +1088,7 @@ void gs_frame::take_screenshot(std::vector<u8>&& data, u32 sshot_width, u32 ssho
 			{
 				if (const std::string sound_path = fs::get_config_dir() + "sounds/snd_screenshot.wav"; fs::is_file(sound_path))
 				{
-					Emu.GetCallbacks().play_sound(sound_path);
+					Emu.GetCallbacks().play_sound(sound_path, std::nullopt);
 				}
 				else
 				{
@@ -1208,6 +1226,16 @@ bool gs_frame::event(QEvent* ev)
 		// This will make the cursor visible again if it was hidden by the mouse idle timeout
 		handle_cursor(visibility(), false, false, true);
 	}
+
+	// Handle events for mouse-based gyro emulation.
+	if (Emu.IsRunning())
+	{
+		if (auto* pad_thr = pad::get_pad_thread(true))
+		{
+			pad_thr->get_mouse_gyro().handle_event(ev, *this);
+		}
+	}
+
 	return QWindow::event(ev);
 }
 

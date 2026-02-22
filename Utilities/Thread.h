@@ -4,6 +4,7 @@
 #include "util/atomic.hpp"
 #include "util/shared_ptr.hpp"
 
+#include <thread>
 #include <string>
 
 // Hardware core layout
@@ -465,6 +466,8 @@ public:
 namespace stx
 {
 	struct launch_retainer;
+
+	extern atomic_t<u32> g_launch_retainer;
 }
 
 // Derived from the callable object Context, possibly a lambda
@@ -481,6 +484,11 @@ class named_thread final : public Context, result_storage<Context>, thread_base
 
 	u64 entry_point2()
 	{
+		while (u32 value = stx::g_launch_retainer)
+		{
+			stx::g_launch_retainer.wait(value);
+		}
+
 		thread::initialize([]()
 		{
 			if constexpr (!result::empty)

@@ -120,8 +120,6 @@ void evdev_joystick_handler::init_config(cfg_pad* cfg)
 	cfg->rstickdeadzone.def    = 30; // between 0 and 255
 	cfg->ltriggerthreshold.def = 0;  // between 0 and 255
 	cfg->rtriggerthreshold.def = 0;  // between 0 and 255
-	cfg->lpadsquircling.def    = 8000;
-	cfg->rpadsquircling.def    = 8000;
 
 	// apply defaults
 	cfg->from_default();
@@ -1348,7 +1346,7 @@ bool evdev_joystick_handler::bindPadToDevice(std::shared_ptr<Pad> pad)
 
 	const auto find_buttons = [&](const cfg::string& name) -> std::set<u32>
 	{
-		const std::vector<std::string> names = cfg_pad::get_buttons(name);
+		const std::vector<std::string> names = cfg_pad::get_buttons(name.to_string());
 
 		// In evdev we store indices to an EvdevButton vector in our pad objects instead of the usual key codes.
 		std::set<u32> indices;

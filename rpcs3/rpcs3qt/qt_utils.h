@@ -68,11 +68,14 @@ namespace gui
 		// Returns a list of all base names of files in dir whose complete file names contain one of the given name_filters
 		QStringList get_dir_entries(const QDir& dir, const QStringList& name_filters, bool full_path = false);
 
-		// Returns the foreground color of QLabel with respect to the current light/dark mode.
-		QColor get_foreground_color();
+		// Returns the foreground color of QLabel or the given widget with respect to the current light/dark mode.
+		QColor get_foreground_color(QWidget* widget = nullptr);
 
-		// Returns the background color of QLabel with respect to the current light/dark mode.
-		QColor get_background_color();
+		// Returns the background color of QLabel or the given widget with respect to the current light/dark mode.
+		QColor get_background_color(QWidget* widget = nullptr);
+
+		// Returns an adjusted color with better contrast, depending on the background.
+		QColor adjust_color_for_background(const QColor& fg, const QColor& bg);
 
 		// Returns the color specified by its color_role for the QLabels with object_name
 		QColor get_label_color(const QString& object_name, const QColor& fallback_light, const QColor& fallback_dark, QPalette::ColorRole color_role = QPalette::WindowText);
@@ -161,7 +164,7 @@ namespace gui
 		QDateTime datetime(s64 time);
 
 		// Convert a QDateTime to a readable string
-		QString format_datetime(const QDateTime& date, const QString& fmt = "yyyy-MM-dd HH:mm:ss");
+		QString format_datetime(const QDateTime& date, const QString& fmt = "yyyy-MM-dd HH:mm:ss", bool is_relative = false, const QString& fmt_relative = "HH:mm:ss");
 
 		// Convert a timestamp to a readable string
 		QString format_timestamp(s64 time, const QString& fmt = "yyyy-MM-dd HH:mm:ss");
@@ -177,6 +180,12 @@ namespace gui
 			// "true" if the default GUI color scheme is dark. "false" otherwise
 			return color_scheme() == Qt::ColorScheme::Dark;
 		}
+
+		// Loads an icon from an (ISO) archive file.
+		bool load_iso_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path);
+
+		// Loads an icon (optionally from an (ISO) archive file).
+		bool load_icon(QPixmap& icon, const std::string& icon_path, const std::string& archive_path);
 
 		template <typename T>
 		void stop_future_watcher(QFutureWatcher<T>& watcher, bool cancel, std::shared_ptr<atomic_t<bool>> cancel_flag = nullptr)

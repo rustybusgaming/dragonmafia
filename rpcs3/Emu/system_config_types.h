@@ -116,7 +116,10 @@ enum class camera_handler
 {
 	null,
 	fake,
-	qt
+	qt,
+#ifdef HAVE_SDL3
+	sdl,
+#endif
 };
 
 enum class camera_flip
@@ -246,13 +249,6 @@ enum class rsx_fifo_mode : unsigned
 	atomic,
 	atomic_ordered,
 	as_ps3,
-};
-
-enum class tsx_usage
-{
-	disabled,
-	enabled,
-	forced,
 };
 
 enum class enter_button_assign

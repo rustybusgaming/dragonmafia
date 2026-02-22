@@ -266,6 +266,7 @@ private:
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PRESSURE_INTENSITY_TOGGLE_HINT: return tr("Show Pressure Intensity Toggle Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_ANALOG_LIMITER_TOGGLE_HINT: return tr( "Show Analog Limiter Toggle Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_MOUSE_AND_KB_TOGGLE_HINT: return tr("Show Mouse And Keyboard Toggle Hint", "Overlays");
+		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_RECORD_WITH_OVERLAYS: return tr("Record With Overlays", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY: return tr("Performance Overlay");
 		case localized_string_id::HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_ENABLE: return tr("Enable Performance Overlay", "Performance Overlay");
 		case localized_string_id::HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_ENABLE_FRAMERATE_GRAPH: return tr("Enable Framerate Graph", "Performance Overlay");
@@ -294,6 +295,9 @@ private:
 		case localized_string_id::HOME_MENU_SAVESTATE_SAVE: return tr("Save Emulation State");
 		case localized_string_id::HOME_MENU_SAVESTATE_AND_EXIT: return tr("Save Emulation State And Exit");
 		case localized_string_id::HOME_MENU_RELOAD_SAVESTATE: return tr("Reload Last Emulation State");
+		case localized_string_id::HOME_MENU_RELOAD_SECOND_SAVESTATE: return tr("Reload Second-To-Last Emulation State");
+		case localized_string_id::HOME_MENU_RELOAD_THIRD_SAVESTATE: return tr("Reload Third-To-Last Emulation State");
+		case localized_string_id::HOME_MENU_RELOAD_FOURTH_SAVESTATE: return tr("Reload Fourth-To-Last Emulation State");
 		case localized_string_id::HOME_MENU_RECORDING: return tr("Start/Stop Recording");
 		case localized_string_id::HOME_MENU_TROPHIES: return tr("Trophies");
 		case localized_string_id::HOME_MENU_TROPHY_LIST_TITLE: return tr("Trophy Progress: %0").arg(std::forward<Args>(args)...);
@@ -332,7 +336,7 @@ private:
 		case localized_string_id::EMULATION_RESUMING: return tr("Resuming...!");
 		case localized_string_id::EMULATION_FROZEN: return tr("The PS3 application has likely crashed, you can close it.");
 		case localized_string_id::SAVESTATE_FAILED_DUE_TO_SAVEDATA: return tr("SaveState failed: Game saving is in progress, wait until finished.");
-		case localized_string_id::SAVESTATE_FAILED_DUE_TO_VDEC: return tr("SaveState failed: VDEC-base video/cutscenes are in order, wait for them to end or enable libvdec.sprx.");
+		case localized_string_id::SAVESTATE_FAILED_DUE_TO_VDEC: return tr("SaveState failed: VDEC-based video/cutscenes are in order, wait for them to end or enable libvdec.sprx.");
 		case localized_string_id::SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING: return tr("SaveState failed: Failed to lock SPU state, enabling SPU-Compatible mode may fix it.");
 		case localized_string_id::SAVESTATE_FAILED_DUE_TO_SPU: return tr("SaveState failed: Failed to lock SPU state, using SPU ASMJIT will fix it.");
 		case localized_string_id::INVALID: return tr("Invalid");

@@ -20,7 +20,6 @@ enum class emu_settings_type
 	MFCDebug,
 	MaxLLVMThreads,
 	LLVMPrecompilation,
-	EnableTSX,
 	AccurateSpuDMA,
 	AccurateClineStores,
 	AccurateRSXAccess,
@@ -107,6 +106,8 @@ enum class emu_settings_type
 	OutputScalingMode,
 	ForceHwMSAAResolve,
 	DisableAsyncHostMM,
+	UseReBAR,
+	RecordWithOverlays,
 
 	// Performance Overlay
 	PerfOverlayEnabled,
@@ -199,6 +200,7 @@ enum class emu_settings_type
 	BindAddress,
 	EnableUpnp,
 	PSNCountry,
+	EnableClans,
 
 	// System
 	LicenseArea,
@@ -231,11 +233,10 @@ inline static const std::map<emu_settings_type, cfg_location> settings_location 
 	{ emu_settings_type::MFCDebug,                 { "Core", "MFC Debug"}},
 	{ emu_settings_type::MaxLLVMThreads,           { "Core", "Max LLVM Compile Threads"}},
 	{ emu_settings_type::LLVMPrecompilation,       { "Core", "LLVM Precompilation"}},
-	{ emu_settings_type::EnableTSX,                { "Core", "Enable TSX"}},
 	{ emu_settings_type::AccurateSpuDMA,           { "Core", "Accurate SPU DMA"}},
 	{ emu_settings_type::AccurateClineStores,      { "Core", "Accurate Cache Line Stores"}},
 	{ emu_settings_type::AccurateRSXAccess,        { "Core", "Accurate RSX reservation access"}},
-	{ emu_settings_type::FIFOAccuracy,             { "Core", "RSX FIFO Accuracy"}},
+	{ emu_settings_type::FIFOAccuracy,             { "Core", "RSX FIFO Fetch Accuracy"}},
 	{ emu_settings_type::XFloatAccuracy,           { "Core", "XFloat Accuracy"}},
 	{ emu_settings_type::MFCCommandsShuffling,     { "Core", "MFC Commands Shuffling Limit"}},
 	{ emu_settings_type::SetDAZandFTZ,             { "Core", "Set DAZ and FTZ"}},
@@ -310,12 +311,14 @@ inline static const std::map<emu_settings_type, cfg_location> settings_location 
 	{ emu_settings_type::OutputScalingMode,          { "Video", "Output Scaling Mode"}},
 	{ emu_settings_type::ForceHwMSAAResolve,         { "Video", "Force Hardware MSAA Resolve"}},
 	{ emu_settings_type::DisableAsyncHostMM,         { "Video", "Disable Asynchronous Memory Manager"}},
+	{ emu_settings_type::RecordWithOverlays,         { "Video", "Record With Overlays"}},
 
 	// Vulkan
 	{ emu_settings_type::VulkanAsyncTextureUploads,           { "Video", "Vulkan", "Asynchronous Texture Streaming 2"}},
 	{ emu_settings_type::VulkanAsyncSchedulerDriver,          { "Video", "Vulkan", "Asynchronous Queue Scheduler"}},
 	{ emu_settings_type::FsrSharpeningStrength,               { "Video", "Vulkan", "FidelityFX CAS Sharpening Intensity"}},
 	{ emu_settings_type::ExclusiveFullscreenMode,             { "Video", "Vulkan", "Exclusive Fullscreen Mode"}},
+	{ emu_settings_type::UseReBAR,                            { "Video", "Vulkan", "Use Re-BAR for GPU uploads"}},
 
 	// Performance Overlay
 	{ emu_settings_type::PerfOverlayEnabled,               { "Video", "Performance Overlay", "Enabled" } },
@@ -409,6 +412,7 @@ inline static const std::map<emu_settings_type, cfg_location> settings_location 
 	{ emu_settings_type::BindAddress,    { "Net", "Bind address"}},
 	{ emu_settings_type::EnableUpnp,     { "Net", "UPNP Enabled"}},
 	{ emu_settings_type::PSNCountry,     { "Net", "PSN Country"}},
+	{ emu_settings_type::EnableClans,     { "Net", "Clans Enabled"}},
 
 	// System
 	{ emu_settings_type::LicenseArea,           { "System", "License Area"}},
