@@ -311,6 +311,14 @@ void audio_ringbuffer::commit_data(f32* buf, u32 sample_cnt)
 	{
 		AudioBackend::convert_to_s16(sample_cnt_out, buf, buf);
 	}
+	else
+	{
+		// Ports are summed without any headroom and the downmix above adds more on top, so the mix
+		// routinely leaves the [-1.0, 1.0] range. Limit it here rather than handing out-of-range
+		// samples to the device, which clips them hard. The s16 path does the same in the
+		// conversion above.
+		AudioBackend::normalize(sample_cnt_out, buf, buf);
+	}
 
 	cb_ringbuf.push(buf, sample_cnt_out * cfg.audio_sample_size);
 }
