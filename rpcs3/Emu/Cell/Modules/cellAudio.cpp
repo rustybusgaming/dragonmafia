@@ -1601,7 +1601,11 @@ error_code cellAudioSetPortLevel(u32 portNum, float level)
 
 	if (level >= 0.0f)
 	{
-		port.level_set.exchange({ level, (port.level - level) / 624.0f });
+		// The increment has to point from the current level towards the new one. With the operands
+		// the other way round the first step moves away from the target, which trips the completion
+		// test in step_volume immediately, so the level snapped in a single sample instead of
+		// ramping over 624 of them and every level change was an audible click.
+		port.level_set.exchange({ level, (level - port.level) / 624.0f });
 	}
 	else
 	{
