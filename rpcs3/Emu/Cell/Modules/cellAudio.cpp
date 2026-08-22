@@ -1069,7 +1069,6 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 
 		auto buf = port.get_vm_ptr(offset);
 
-		static constexpr float minus_3db = 0.707f; // value taken from https://www.dolby.com/us/en/technologies/a-guide-to-dolby-metadata.pdf
 		float m = master_volume;
 
 		// part of cellAudioSetPortLevel functionality
@@ -1124,9 +1123,9 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 				if constexpr (downmix == AudioChannelCnt::STEREO)
 				{
 					// Don't mix in the lfe as per dolby specification and based on documentation
-					const float mid = center * 0.5f;
-					out_buffer[out + 0] += left * minus_3db + mid + side_left * 0.5f + rear_left * 0.5f;
-					out_buffer[out + 1] += right * minus_3db + mid + side_right * 0.5f + rear_right * 0.5f;
+					const float mid = center * AudioBackend::center_coef;
+					out_buffer[out + 0] += (left + mid + (side_left + rear_left) * AudioBackend::surround_coef) * AudioBackend::downmix_norm_stereo_71;
+					out_buffer[out + 1] += (right + mid + (side_right + rear_right) * AudioBackend::surround_coef) * AudioBackend::downmix_norm_stereo_71;
 				}
 				else if constexpr (downmix == AudioChannelCnt::SURROUND_5_1)
 				{
@@ -1140,13 +1139,13 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 
 						if constexpr (out_channels == 6)
 						{
-							out_buffer[out + 4] += side_left + rear_left;
-							out_buffer[out + 5] += side_right + rear_right;
+							out_buffer[out + 4] += (side_left + rear_left) * AudioBackend::downmix_norm_pair;
+							out_buffer[out + 5] += (side_right + rear_right) * AudioBackend::downmix_norm_pair;
 						}
 						else // When using 7.1 ouput, out_buffer[out + 4] and out_buffer[out + 5] are the rear channels, so the side channels need to be mixed into [out + 6] and [out + 7]
 						{
-							out_buffer[out + 6] += side_left + rear_left;
-							out_buffer[out + 7] += side_right + rear_right;
+							out_buffer[out + 6] += (side_left + rear_left) * AudioBackend::downmix_norm_pair;
+							out_buffer[out + 7] += (side_right + rear_right) * AudioBackend::downmix_norm_pair;
 						}
 					}
 				}

@@ -189,6 +189,29 @@ public:
 	static audio_channel_layout default_layout(u32 channels);
 
 	/*
+	 * Fold-down coefficients, per ITU-R BS.775: the centre and surround channels enter the front
+	 * pair 3 dB down.
+	 */
+	static constexpr f32 center_coef = std::numbers::sqrt2_v<f32> / 2;
+	static constexpr f32 surround_coef = std::numbers::sqrt2_v<f32> / 2;
+
+	/*
+	 * Summing channels with the coefficients above lands well above full scale - folding 7.1 down
+	 * to mono at unity reaches seven times it - so each output is scaled by the reciprocal square
+	 * root of the sum of the squares of the coefficients feeding it. That preserves the power of
+	 * whatever feeds an output rather than its peak, which is the right target for the largely
+	 * uncorrelated channels real content carries, and it leaves pass-through channels at unity so
+	 * nothing is attenuated that was not actually mixed. Every fold-down in this file and in
+	 * cellAudio's mixer uses these, so both agree on what a given downmix sounds like.
+	 */
+	static constexpr f32 downmix_norm_pair = 0.70710678f;         // 1/sqrt(2)   two unity channels
+	static constexpr f32 downmix_norm_front_center = 0.81649658f; // 1/sqrt(1.5) front + centre
+	static constexpr f32 downmix_norm_stereo_51 = 0.70710678f;    // 1/sqrt(2)   front + centre + one surround
+	static constexpr f32 downmix_norm_stereo_71 = 0.63245553f;    // 1/sqrt(2.5) front + centre + two surrounds
+	static constexpr f32 downmix_norm_mono_51 = 0.44721360f;      // 1/sqrt(5)   five unity channels
+	static constexpr f32 downmix_norm_mono_71 = 0.37796447f;      // 1/sqrt(7)   seven unity channels
+
+	/*
 	 * Downmix audio stream.
 	 */
 	template <AudioChannelCnt src_ch_cnt, audio_channel_layout dst_layout>
@@ -197,9 +220,6 @@ public:
 		const u32 dst_ch_cnt = default_layout_channel_count(dst_layout);
 		if (static_cast<u32>(src_ch_cnt) <= dst_ch_cnt)
 			fmt::throw_exception("src channel count must be bigger than dst channel count");
-
-		static constexpr f32 center_coef = std::numbers::sqrt2_v<f32> / 2;
-		static constexpr f32 surround_coef = std::numbers::sqrt2_v<f32> / 2;
 
 		for (u32 src_sample = 0, dst_sample = 0; src_sample < sample_cnt; src_sample += static_cast<u32>(src_ch_cnt), dst_sample += dst_ch_cnt)
 		{
@@ -210,7 +230,7 @@ public:
 			{
 				if constexpr (dst_layout == audio_channel_layout::mono)
 				{
-					dst[dst_sample + 0] = left + right;
+					dst[dst_sample + 0] = (left + right) * downmix_norm_pair;
 				}
 			}
 			else if constexpr (src_ch_cnt == AudioChannelCnt::SURROUND_5_1)
@@ -223,8 +243,8 @@ public:
 				if constexpr (dst_layout == audio_channel_layout::quadraphonic || dst_layout == audio_channel_layout::quadraphonic_lfe)
 				{
 					const f32 mid = center * center_coef;
-					dst[dst_sample + 0] = left + mid;
-					dst[dst_sample + 1] = right + mid;
+					dst[dst_sample + 0] = (left + mid) * downmix_norm_front_center;
+					dst[dst_sample + 1] = (right + mid) * downmix_norm_front_center;
 					dst[dst_sample + 2] = side_left;
 					dst[dst_sample + 3] = side_right;
 
@@ -236,8 +256,8 @@ public:
 				else if constexpr (dst_layout == audio_channel_layout::stereo || dst_layout == audio_channel_layout::stereo_lfe)
 				{
 					const f32 mid = center * center_coef;
-					dst[dst_sample + 0] = left + mid + side_left * surround_coef;
-					dst[dst_sample + 1] = right + mid + side_right * surround_coef;
+					dst[dst_sample + 0] = (left + mid + side_left * surround_coef) * downmix_norm_stereo_51;
+					dst[dst_sample + 1] = (right + mid + side_right * surround_coef) * downmix_norm_stereo_51;
 
 					if constexpr (dst_layout == audio_channel_layout::stereo_lfe)
 					{
@@ -246,7 +266,7 @@ public:
 				}
 				else if constexpr (dst_layout == audio_channel_layout::mono)
 				{
-					dst[dst_sample + 0] = left + right + center + side_left + side_right;
+					dst[dst_sample + 0] = (left + right + center + side_left + side_right) * downmix_norm_mono_51;
 				}
 			}
 			else if constexpr (src_ch_cnt == AudioChannelCnt::SURROUND_7_1)
@@ -264,16 +284,16 @@ public:
 					dst[dst_sample + 1] = right;
 					dst[dst_sample + 2] = center;
 					dst[dst_sample + 3] = low_freq;
-					dst[dst_sample + 4] = side_left + rear_left;
-					dst[dst_sample + 5] = side_right + rear_right;
+					dst[dst_sample + 4] = (side_left + rear_left) * downmix_norm_pair;
+					dst[dst_sample + 5] = (side_right + rear_right) * downmix_norm_pair;
 				}
 				else if constexpr (dst_layout == audio_channel_layout::quadraphonic || dst_layout == audio_channel_layout::quadraphonic_lfe)
 				{
 					const f32 mid = center * center_coef;
-					dst[dst_sample + 0] = left + mid;
-					dst[dst_sample + 1] = right + mid;
-					dst[dst_sample + 2] = side_left + rear_left;
-					dst[dst_sample + 3] = side_right + rear_right;
+					dst[dst_sample + 0] = (left + mid) * downmix_norm_front_center;
+					dst[dst_sample + 1] = (right + mid) * downmix_norm_front_center;
+					dst[dst_sample + 2] = (side_left + rear_left) * downmix_norm_pair;
+					dst[dst_sample + 3] = (side_right + rear_right) * downmix_norm_pair;
 
 					if constexpr (dst_layout == audio_channel_layout::quadraphonic_lfe)
 					{
@@ -283,8 +303,8 @@ public:
 				else if constexpr (dst_layout == audio_channel_layout::stereo || dst_layout == audio_channel_layout::stereo_lfe)
 				{
 					const f32 mid = center * center_coef;
-					dst[dst_sample + 0] = left + mid + (side_left + rear_left) * surround_coef;
-					dst[dst_sample + 1] = right + mid + (side_right + rear_right) * surround_coef;
+					dst[dst_sample + 0] = (left + mid + (side_left + rear_left) * surround_coef) * downmix_norm_stereo_71;
+					dst[dst_sample + 1] = (right + mid + (side_right + rear_right) * surround_coef) * downmix_norm_stereo_71;
 
 					if constexpr (dst_layout == audio_channel_layout::stereo_lfe)
 					{
@@ -293,7 +313,7 @@ public:
 				}
 				else if constexpr (dst_layout == audio_channel_layout::mono)
 				{
-					dst[dst_sample + 0] = left + right + center + side_left + rear_left + side_right + rear_right;
+					dst[dst_sample + 0] = (left + right + center + side_left + rear_left + side_right + rear_right) * downmix_norm_mono_71;
 				}
 			}
 		}
