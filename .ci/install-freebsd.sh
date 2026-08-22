@@ -2,8 +2,11 @@
 # NOTE: this script is run under root permissions
 # shellcheck shell=sh disable=SC2096
 
-# RPCS3 often needs recent Qt and Vulkan-Headers
-sed -i '' 's/quarterly/latest/' /etc/pkg/FreeBSD.conf
+# Stay on the image's default 'quarterly' repository. This used to switch to 'latest' because RPCS3
+# often needs recent Qt and Vulkan-Headers, but 'latest' currently ships no qt6-multimedia package
+# at all, so the pkg install below aborts before anything is compiled. Quarterly carries the same
+# Qt 6.11.1 that latest does, well above the 6.7.0 CMake asks for, and a Vulkan-Headers one patch
+# behind. Switch back if quarterly ever falls behind what RPCS3 needs.
 
 export ASSUME_ALWAYS_YES=true
 pkg info # debug
