@@ -2,14 +2,27 @@
 # NOTE: this script is run under root permissions
 # shellcheck shell=sh disable=SC2096
 
-# Stay on the image's default 'quarterly' repository. This used to switch to 'latest' because RPCS3
-# often needs recent Qt and Vulkan-Headers, but 'latest' currently ships no qt6-multimedia package
-# at all, so the pkg install below aborts before anything is compiled. Quarterly carries the same
-# Qt 6.11.1 that latest does, well above the 6.7.0 CMake asks for, and a Vulkan-Headers one patch
-# behind. Switch back if quarterly ever falls behind what RPCS3 needs.
+# Pin the package repository to the 'quarterly' branch. 'latest' currently ships no qt6-multimedia
+# package at all, and RPCS3 links Qt6::Multimedia and Qt6::MultimediaWidgets unconditionally (see
+# 3rdparty/qt6.cmake), so the install below aborts before anything is compiled. Quarterly carries
+# the same Qt 6.11.1 that latest does, well above the 6.7.0 minimum, and every other dependency
+# here differs at patch level at most. Switch back once latest has qt6-multimedia again.
+#
+# This has to override whatever the VM image configures rather than rewrite /etc/pkg/FreeBSD.conf:
+# the image already resolves to latest, so the old 's/quarterly/latest/' rewrite was a no-op.
+# /usr/local/etc/pkg/repos is read after /etc/pkg and the zz- prefix sorts last within it, so this
+# definition of the FreeBSD repo is the one that wins. Only the url is set, so the signature type
+# and mirror settings are inherited from the image's definition.
+mkdir -p /usr/local/etc/pkg/repos
+cat > /usr/local/etc/pkg/repos/zz-quarterly.conf <<'REPO'
+FreeBSD: {
+  url: "pkg+https://pkg.FreeBSD.org/${ABI}/quarterly"
+}
+REPO
 
 export ASSUME_ALWAYS_YES=true
 pkg info # debug
+pkg -vv | sed -n '/^Repositories:/,$p' || true # debug: effective repository configuration
 
 # WITH_LLVM and Clang compiler
 pkg install "llvm$LLVM_COMPILER_VER"
