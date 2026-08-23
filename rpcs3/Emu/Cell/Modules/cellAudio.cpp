@@ -1071,13 +1071,18 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 
 		float m = master_volume;
 
+		// Read the level ramp once per buffer instead of once per sample frame. It only changes
+		// when the guest calls cellAudioSetPortLevel, which cannot land midway through a mix, so
+		// the atomic load was repeated 256 times per port per buffer for a value that could not
+		// move.
+		const audio_port::level_set_t param = port.level_set.load();
+		bool stepping = param.inc != 0.0f;
+
 		// part of cellAudioSetPortLevel functionality
 		// spread port volume changes over 13ms
-		auto step_volume = [master_volume, &m](audio_port& port)
+		auto step_volume = [&param, &stepping, master_volume, &m](audio_port& port)
 		{
-			const audio_port::level_set_t param = port.level_set.load();
-
-			if (param.inc != 0.0f)
+			if (stepping)
 			{
 				port.level += param.inc;
 				const bool dec = param.inc < 0.0f;
@@ -1086,6 +1091,7 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 				{
 					port.level = param.value;
 					port.level_set.compare_and_swap(param, { param.value, 0.0f });
+					stepping = false;
 				}
 			}
 
