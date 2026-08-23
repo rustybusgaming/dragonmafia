@@ -46,7 +46,33 @@ if [ ! -d "/tmp/Qt/$QT_VER" ]; then
   pip3 install py7zr requests semantic_version lxml --no-cache --break-system-packages
   mkdir -p "$QT_VER/macos" ; ln -s "macos" "$QT_VER/clang_64"
   sed -i '' 's/args\.version \/ derive_toolchain_dir(args) \/ //g' "$WORKDIR/qt-downloader/qt-downloader"
-  python3 "$WORKDIR/qt-downloader/qt-downloader" macos desktop "$QT_VER" clang_64 --opensource --addons qtmultimedia qtimageformats -o "$QT_VER/clang_64"
+
+  # The Qt download servers intermittently close the connection without responding, which fails the
+  # whole job before a single file is compiled ("Connection aborted ... RemoteDisconnected"). There
+  # is nothing to diagnose when that happens and nothing local to fix, so retry rather than burning
+  # a full job. Each attempt starts from an empty output directory, so a download interrupted part
+  # way through cannot leave a half extracted Qt behind for the next one to build against. The
+  # clang_64 symlink points at macos and stays valid across the wipe.
+  qt_attempt=1
+  qt_attempts=5
+
+  while true; do
+    if python3 "$WORKDIR/qt-downloader/qt-downloader" macos desktop "$QT_VER" clang_64 --opensource --addons qtmultimedia qtimageformats -o "$QT_VER/clang_64"; then
+      break
+    fi
+
+    if [ "$qt_attempt" -ge "$qt_attempts" ]; then
+      echo "qt-downloader failed $qt_attempts times, giving up" >&2
+      exit 1
+    fi
+
+    qt_backoff=$((qt_attempt * 15))
+    echo "qt-downloader attempt $qt_attempt of $qt_attempts failed, retrying in ${qt_backoff}s" >&2
+    sleep "$qt_backoff"
+    rm -rf "$QT_VER/macos"
+    mkdir -p "$QT_VER/macos"
+    qt_attempt=$((qt_attempt + 1))
+  done
 fi
 
 cd "$WORKDIR"

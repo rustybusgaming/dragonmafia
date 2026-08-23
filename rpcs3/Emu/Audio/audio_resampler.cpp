@@ -4,12 +4,23 @@
 
 audio_resampler::audio_resampler()
 {
-	// Improved quality settings for better audio output
-	resampler.setSetting(SETTING_SEQUENCE_MS, 40);   // Increased sequence length for better quality (was 20)
-	resampler.setSetting(SETTING_SEEKWINDOW_MS, 15); // Better seeking window for smoother transitions
-	resampler.setSetting(SETTING_OVERLAP_MS, 8);     // Improved overlap for better quality
-	resampler.setSetting(SETTING_USE_QUICKSEEK, 0);  // Disable quick seek for higher quality (was 1)
-	resampler.setSetting(SETTING_USE_AA_FILTER, 1);  // Enable anti-aliasing filter for cleaner sound
+	// This resampler sits inside the emulated audio path, so the delay it holds internally is part
+	// of the latency cellAudio's buffering algorithm is trying to control - and it cannot see it,
+	// because get_enqueued_samples() only counts samples SoundTouch has already produced. Long
+	// WSOLA windows therefore both add delay and make the tempo control loop overshoot, on top of
+	// smearing transients across the splice. Keep the windows short.
+	resampler.setSetting(SETTING_SEQUENCE_MS, 20);
+	resampler.setSetting(SETTING_SEEKWINDOW_MS, 8);
+	resampler.setSetting(SETTING_OVERLAP_MS, 4);
+
+	// The full correlation search runs on the audio thread and costs several times what quick seek
+	// does. Starving that thread into an underrun is far more audible than the marginally worse
+	// splice point quick seek settles for at the sub-percent tempo corrections used here.
+	resampler.setSetting(SETTING_USE_QUICKSEEK, 1);
+
+	// Only the tempo is ever changed (see set_tempo), the sample rate is left untouched, so the rate
+	// transposer this filter belongs to is bypassed and the filter would only burn cycles.
+	resampler.setSetting(SETTING_USE_AA_FILTER, 0);
 }
 
 audio_resampler::~audio_resampler()

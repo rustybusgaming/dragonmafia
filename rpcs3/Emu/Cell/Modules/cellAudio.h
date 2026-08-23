@@ -411,6 +411,11 @@ public:
 	u64 m_start_time = 0;
 	u64 m_dynamic_period = 0;
 	f32 m_average_playtime = 0.0f;
+
+	// Master volume actually being applied, which trails the configured one so that mute and the
+	// volume hotkeys slew instead of stepping. Starts silent so the first buffer fades in rather
+	// than beginning mid-waveform.
+	f32 m_master_volume = 0.0f;
 	bool m_backend_failed = false;
 	bool m_audio_should_restart = false;
 
