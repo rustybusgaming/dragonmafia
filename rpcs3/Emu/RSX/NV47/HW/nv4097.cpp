@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Common/BufferUtils.h"
+#include "Emu/RSX/Host/MM.h"
 
 #define RSX(ctx) ctx->rsxthr
 #define REGS(ctx) (&rsx::method_registers)
@@ -672,6 +673,23 @@ namespace rsx
 			RSX(ctx)->enable_conditional_rendering(vm::cast(address_ptr));
 		}
 
+		void set_shading_mode(context* ctx, u32 reg, u32 arg)
+		{
+			if (arg == REGS(ctx)->latch)
+			{
+				return;
+			}
+
+			if (to_shading_mode(arg))
+			{
+				RSX(ctx)->m_graphics_state |= rsx::vertex_program_state_dirty | rsx::fragment_program_state_dirty;
+				return;
+			}
+
+			// Rollback
+			REGS(ctx)->decode(reg, REGS(ctx)->latch);
+		}
+
 		void set_zcull_render_enable(context* ctx, u32, u32)
 		{
 			RSX(ctx)->notify_zcull_info_changed();
@@ -702,8 +720,10 @@ namespace rsx
 			}
 
 			const u32 addr = RSX(ctx)->iomap_table.get_addr(0xf100000 + (index * 0x40));
-
 			ensure(addr != umax);
+
+			// Notify ticks are strongly ordered
+			RSX(ctx)->sync();
 
 			vm::_ptr<atomic_t<RsxNotify>>(addr)->store(
 			{
