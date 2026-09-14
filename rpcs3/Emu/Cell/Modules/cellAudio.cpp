@@ -311,6 +311,14 @@ void audio_ringbuffer::commit_data(f32* buf, u32 sample_cnt)
 	{
 		AudioBackend::convert_to_s16(sample_cnt_out, buf, buf);
 	}
+	else
+	{
+		// Ports are summed without any headroom and the downmix above adds more on top, so the mix
+		// routinely leaves the [-1.0, 1.0] range. Limit it here rather than handing out-of-range
+		// samples to the device, which clips them hard. The s16 path does the same in the
+		// conversion above.
+		AudioBackend::normalize(sample_cnt_out, buf, buf);
+	}
 
 	cb_ringbuf.push(buf, sample_cnt_out * cfg.audio_sample_size);
 }
@@ -1049,7 +1057,44 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 	constexpr u32 out_channels = static_cast<u32>(channels);
 	constexpr u32 out_buffer_sz = out_channels * AUDIO_BUFFER_SAMPLES;
 
-	const float master_volume = audio::get_volume();
+	const float master_volume_target = audio::get_volume();
+
+	// Port level is carefully ramped below, and then multiplied by a master volume that used to
+	// change instantly: muting drops get_volume() straight to zero, so the output went from full
+	// scale to silence within one sample - the largest step the mixer can produce, and audible as
+	// a click on every mute, unmute and volume hotkey press. Slew it at the same rate the port
+	// level uses instead, and precompute it per sample frame here rather than inside the port
+	// loop, because that loop runs once per active port and would otherwise advance the ramp
+	// several times faster whenever more than one port is playing.
+	std::array<float, AUDIO_BUFFER_SAMPLES> master_volume;
+
+	if (m_master_volume == master_volume_target)
+	{
+		master_volume.fill(master_volume_target);
+	}
+	else
+	{
+		// Full scale in 13 ms at 48 kHz, so smaller changes settle proportionally sooner
+		constexpr float max_step = 1.0f / 624.0f;
+
+		float volume = m_master_volume;
+
+		for (float& sample_volume : master_volume)
+		{
+			if (volume < master_volume_target)
+			{
+				volume = std::min(volume + max_step, master_volume_target);
+			}
+			else
+			{
+				volume = std::max(volume - max_step, master_volume_target);
+			}
+
+			sample_volume = volume;
+		}
+
+		m_master_volume = volume;
+	}
 
 	// Reset out_buffer
 	std::memset(out_buffer, 0, out_buffer_sz * sizeof(float));
@@ -1061,35 +1106,40 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 
 		auto buf = port.get_vm_ptr(offset);
 
-		static constexpr float minus_3db = 0.707f; // value taken from https://www.dolby.com/us/en/technologies/a-guide-to-dolby-metadata.pdf
-		float m = master_volume;
+		// Read the level ramp once per buffer instead of once per sample frame. It only changes
+		// when the guest calls cellAudioSetPortLevel, which cannot land midway through a mix, so
+		// the atomic load was repeated 256 times per port per buffer for a value that could not
+		// move.
+		const audio_port::level_set_t param = port.level_set.load();
+		bool stepping = param.inc != 0.0f;
 
 		// part of cellAudioSetPortLevel functionality
 		// spread port volume changes over 13ms
-		auto step_volume = [master_volume, &m](audio_port& port)
+		auto step_volume = [&param, &stepping](audio_port& port)
 		{
-			const audio_port::level_set_t param = port.level_set.load();
-
-			if (param.inc != 0.0f)
+			if (!stepping)
 			{
-				port.level += param.inc;
-				const bool dec = param.inc < 0.0f;
-
-				if ((!dec && param.value - port.level <= 0.0f) || (dec && param.value - port.level >= 0.0f))
-				{
-					port.level = param.value;
-					port.level_set.compare_and_swap(param, { param.value, 0.0f });
-				}
+				return;
 			}
 
-			m = port.level * master_volume;
+			port.level += param.inc;
+			const bool dec = param.inc < 0.0f;
+
+			if ((!dec && param.value - port.level <= 0.0f) || (dec && param.value - port.level >= 0.0f))
+			{
+				port.level = param.value;
+				port.level_set.compare_and_swap(param, { param.value, 0.0f });
+				stepping = false;
+			}
 		};
 
 		if (port.num_channels == 2)
 		{
-			for (u32 out = 0, in = 0; out < out_buffer_sz; out += out_channels, in += 2)
+			for (u32 f = 0, out = 0, in = 0; out < out_buffer_sz; f++, out += out_channels, in += 2)
 			{
 				step_volume(port);
+
+				const float m = port.level * master_volume[f];
 
 				const float left  = buf[in + 0] * m;
 				const float right = buf[in + 1] * m;
@@ -1100,9 +1150,11 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 		}
 		else if (port.num_channels == 8)
 		{
-			for (u32 out = 0, in = 0; out < out_buffer_sz; out += out_channels, in += 8)
+			for (u32 f = 0, out = 0, in = 0; out < out_buffer_sz; f++, out += out_channels, in += 8)
 			{
 				step_volume(port);
+
+				const float m = port.level * master_volume[f];
 
 				const float left       = buf[in + 0] * m;
 				const float right      = buf[in + 1] * m;
@@ -1116,9 +1168,9 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 				if constexpr (downmix == AudioChannelCnt::STEREO)
 				{
 					// Don't mix in the lfe as per dolby specification and based on documentation
-					const float mid = center * 0.5f;
-					out_buffer[out + 0] += left * minus_3db + mid + side_left * 0.5f + rear_left * 0.5f;
-					out_buffer[out + 1] += right * minus_3db + mid + side_right * 0.5f + rear_right * 0.5f;
+					const float mid = center * AudioBackend::center_coef;
+					out_buffer[out + 0] += (left + mid + (side_left + rear_left) * AudioBackend::surround_coef) * AudioBackend::downmix_norm_stereo_71;
+					out_buffer[out + 1] += (right + mid + (side_right + rear_right) * AudioBackend::surround_coef) * AudioBackend::downmix_norm_stereo_71;
 				}
 				else if constexpr (downmix == AudioChannelCnt::SURROUND_5_1)
 				{
@@ -1132,13 +1184,13 @@ void cell_audio_thread::mix(float* out_buffer, s32 offset)
 
 						if constexpr (out_channels == 6)
 						{
-							out_buffer[out + 4] += side_left + rear_left;
-							out_buffer[out + 5] += side_right + rear_right;
+							out_buffer[out + 4] += (side_left + rear_left) * AudioBackend::downmix_norm_pair;
+							out_buffer[out + 5] += (side_right + rear_right) * AudioBackend::downmix_norm_pair;
 						}
 						else // When using 7.1 ouput, out_buffer[out + 4] and out_buffer[out + 5] are the rear channels, so the side channels need to be mixed into [out + 6] and [out + 7]
 						{
-							out_buffer[out + 6] += side_left + rear_left;
-							out_buffer[out + 7] += side_right + rear_right;
+							out_buffer[out + 6] += (side_left + rear_left) * AudioBackend::downmix_norm_pair;
+							out_buffer[out + 7] += (side_right + rear_right) * AudioBackend::downmix_norm_pair;
 						}
 					}
 				}
@@ -1593,7 +1645,11 @@ error_code cellAudioSetPortLevel(u32 portNum, float level)
 
 	if (level >= 0.0f)
 	{
-		port.level_set.exchange({ level, (port.level - level) / 624.0f });
+		// The increment has to point from the current level towards the new one. With the operands
+		// the other way round the first step moves away from the target, which trips the completion
+		// test in step_volume immediately, so the level snapped in a single sample instead of
+		// ramping over 624 of them and every level change was an audible click.
+		port.level_set.exchange({ level, (level - port.level) / 624.0f });
 	}
 	else
 	{
